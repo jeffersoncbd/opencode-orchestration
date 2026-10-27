@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+docker network inspect dockercode >/dev/null 2>&1 || docker network create dockercode
+
+base="$(basename "$PWD")"
+if ! [[ "$base" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+  echo "erro: o nome da pasta '$base' não é válido para o container principal." >&2
+  echo "use letras, números, '_', '.' e '-', começando por letra ou número." >&2
+  exit 1
+fi
+name="dockercode-$base"
+if docker container inspect "$name" >/dev/null 2>&1; then
+  echo "erro: já existe um container chamado '$name'." >&2
+  echo "encerre a outra sessão principal (ou remova o container) e tente de novo." >&2
+  exit 1
+fi
+
+opts=()
+cmd=(opencode-run opencode)
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --) shift; cmd=("$@"); break ;;
+    *) opts+=("$1"); shift ;;
+  esac
+done
+
+config_mount=()
+if [[ -d "$HOME/.config/dockercode" ]]; then
+  config_mount=(-v "$HOME/.config/dockercode:/tmp/.config/opencode")
+fi
+
+password_env=()
+if [[ -f "$HOME/.config/dockercode/agent-password" ]]; then
+  password_env=(-e "OPENCODE_AGENT_PASSWORD=$(cat "$HOME/.config/dockercode/agent-password")")
+fi
+
+exec docker run -it --rm \
+  --name "$name" \
+  --network dockercode \
+  -u "$(id -u):$(id -g)" \
+  -e HOME=/tmp \
+  -v "$PWD":/workspace \
+  ${config_mount[@]+"${config_mount[@]}"} \
+  ${password_env[@]+"${password_env[@]}"} \
+  -e OPENCODE_API_KEY \
+  ${opts[@]+"${opts[@]}"} \
+  "${cmd[@]}"

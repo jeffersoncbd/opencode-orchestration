@@ -1,0 +1,13 @@
+{
+  "name": "opencode-orchestration",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "smoke": "scripts/smoke.sh"
+  }
+}

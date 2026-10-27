@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+docker network inspect dockercode >/dev/null 2>&1 || docker network create dockercode
+
+PASS_FILE="$HOME/.config/dockercode/agent-password"
+if [[ ! -f "$PASS_FILE" ]]; then
+  mkdir -p "$(dirname "$PASS_FILE")"
+  head -c 32 /dev/urandom | base64 | tr -d '\n' > "$PASS_FILE"
+  chmod 600 "$PASS_FILE"
+fi
+PASSWORD="$(cat "$PASS_FILE")"
+
+name="$(basename "$PWD")"
+if ! [[ "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+  echo "erro: o nome da pasta '$name' não é um nome de serviço válido." >&2
+  echo "use letras, números, '_', '.' e '-', começando por letra ou número." >&2
+  exit 1
+fi
+if docker container inspect "$name" >/dev/null 2>&1; then
+  echo "erro: já existe um container chamado '$name'." >&2
+  echo "pare/remova o container anterior (docker stop '$name' ou docker rm '$name') e tente de novo." >&2
+  exit 1
+fi
+
+opts=()
+cmd=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --) shift; cmd=("$@"); break ;;
+    *) opts+=("$1"); shift ;;
+  esac
+done
+
+docker run -d --rm \
+  --name "$name" \
+  --network dockercode \
+  -u "$(id -u):$(id -g)" \
+  -e HOME=/tmp \
+  -e "OPENCODE_SERVER_PASSWORD=$PASSWORD" \
+  -e OPENCODE_API_KEY \
+  -v "$PWD":/workspace \
+  ${opts[@]+"${opts[@]}"} \
+  opencode-agent \
+  ${cmd[@]+"${cmd[@]}"}
+
+# O comando padrão é o servidor do agente; comandos customizados (após --) não são checados.
+if [[ ${#cmd[@]} -eq 0 ]]; then
+  echo "aguardando o agente '$name' responder em /api/info..." >&2
+  ready=false
+  deadline=$((SECONDS + 10))
+
+  while (( SECONDS < deadline )); do
+    if docker exec "$name" curl -fsS --connect-timeout 1 --max-time 1 \
+      -u "opencode:$PASSWORD" "http://127.0.0.1:4096/api/info" >/dev/null 2>&1; then
+      ready=true
+      break
+    fi
+    if ! docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null | grep -q '^true$'; then
+      break
+    fi
+    sleep 0.5
+  done
+
+  if [[ "$ready" != true ]]; then
+    echo "erro: o agente '$name' não respondeu em /api/info em até 10s." >&2
+    echo "--- docker logs --tail 50 $name ---" >&2
+    docker logs --tail 50 "$name" >&2 || true
+    docker stop -t 2 "$name" >/dev/null 2>&1 || true
+    exit 1
+  fi
+fi
+
+if [[ ${#cmd[@]} -eq 0 ]]; then
+  echo "agente '$name' iniciado: http://${name}:4096 (logs: docker logs -f ${name})"
+else
+  echo "container '$name' iniciado com comando customizado (sem health check): docker logs -f ${name}"
+fi
