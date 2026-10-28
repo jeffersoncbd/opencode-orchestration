@@ -11,6 +11,7 @@ command -v docker >/dev/null 2>&1 || { echo "erro: docker não encontrado no PAT
 mkdir -p "$PREFIX_BIN"
 install -m 755 "$HERE/bin/dockercode"  "$PREFIX_BIN/dockercode"
 install -m 755 "$HERE/bin/dockeragent" "$PREFIX_BIN/dockeragent"
+install -m 644 "$HERE/bin/dockercode-config.sh" "$PREFIX_BIN/dockercode-config.sh"
 
 # 2. Configuração do opencode (plugin de tools, funções puras e agente "Agent")
 mkdir -p "$CONFIG_ROOT/plugins" "$CONFIG_ROOT/lib" "$CONFIG_ROOT/agents"
@@ -29,3 +30,8 @@ echo
 echo "opencode-orchestration instalado."
 echo "  principal:  dockercode   (na raiz do projeto)"
 echo "  agente:     dockeragent  (na pasta de cada serviço)"
+if [[ -f "$CONFIG_ROOT/opencode.json" || -f "$CONFIG_ROOT/opencode.jsonc" ]]; then
+  echo "  config:     $CONFIG_ROOT/opencode.json(c) (vale para todos os serviços)"
+else
+  echo "  config:     opcional em $CONFIG_ROOT/opencode.json (vale para todos os serviços)"
+fi

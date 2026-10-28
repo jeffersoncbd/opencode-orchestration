@@ -2,6 +2,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../bin/dockercode-config.sh
+source "$HERE/bin/dockercode-config.sh"
 NETWORK="${OPENCODE_SMOKE_NETWORK:-dockercode}"
 IMAGE="${OPENCODE_SMOKE_IMAGE:-opencode-run}"
 SERVICE_DIR="${1:-$PWD}"
@@ -17,7 +19,8 @@ o agente, ele é parado ao final.
 
 Requer:
   - OPENCODE_API_KEY exportada;
-  - opencode.json na pasta do serviço;
+  - opencode.json na pasta do serviço OU na configuração do usuário
+    (~/.config/dockercode/opencode.json, ou DOCKERCODE_CONFIG_FILE/DIR);
   - imagens instaladas (./install.sh) e rede dockercode.
 
 Variáveis opcionais:
@@ -94,19 +97,12 @@ else
   fi
 
   has_config=false
-  for candidate in \
-    "$SERVICE_DIR/opencode.json" \
-    "$SERVICE_DIR/opencode.jsonc" \
-    "$SERVICE_DIR/.opencode/opencode.json" \
-    "$SERVICE_DIR/.opencode/opencode.jsonc"; do
-    if [[ -f "$candidate" ]]; then
-      has_config=true
-      break
-    fi
-  done
+  if _dockercode_has_project_config "$SERVICE_DIR" || [[ ${#USER_CONFIGS[@]} -gt 0 ]]; then
+    has_config=true
+  fi
   if [[ "$has_config" != true ]]; then
-    echo "erro: nenhum opencode.json encontrado em '$SERVICE_DIR'." >&2
-    echo "o agente precisa do provider configurado na pasta do serviço." >&2
+    echo "erro: nenhum opencode.json encontrado em '$SERVICE_DIR' nem na configuração do usuário." >&2
+    echo "defina o provider em '$SERVICE_DIR/opencode.json' ou em '${USER_CONFIG_DIR:-$HOME/.config/dockercode}/opencode.json'." >&2
     exit 1
   fi
 

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=dockercode-config.sh
+source "$BIN_DIR/dockercode-config.sh"
+
 docker network inspect dockercode >/dev/null 2>&1 || docker network create dockercode
 
 PASS_FILE="$HOME/.config/dockercode/agent-password"
@@ -33,6 +37,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# A configuração do usuário é montada como config global do agente
+# (/tmp/.config/opencode), sem trazer o plugin/agentes do principal.
+user_config_mount=()
+for config_file in ${USER_CONFIGS[@]+"${USER_CONFIGS[@]}"}; do
+  user_config_mount+=(-v "$config_file:/tmp/.config/opencode/$(basename "$config_file"):ro")
+done
+
+if [[ ${#USER_CONFIGS[@]} -gt 0 ]]; then
+  echo "config do usuário: ${USER_CONFIGS[*]}" >&2
+elif ! _dockercode_has_project_config "$PWD"; then
+  echo "aviso: nenhum opencode.json encontrado no projeto nem em '${USER_CONFIG_DIR:-$HOME/.config/dockercode}'." >&2
+fi
+
 docker run -d --rm \
   --name "$name" \
   --network dockercode \
@@ -41,6 +58,7 @@ docker run -d --rm \
   -e "OPENCODE_SERVER_PASSWORD=$PASSWORD" \
   -e OPENCODE_API_KEY \
   -v "$PWD":/workspace \
+  ${user_config_mount[@]+"${user_config_mount[@]}"} \
   ${opts[@]+"${opts[@]}"} \
   opencode-agent \
   ${cmd[@]+"${cmd[@]}"}

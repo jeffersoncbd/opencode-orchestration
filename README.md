@@ -31,7 +31,7 @@ Todos compartilham a rede Docker `dockercode` e se alcançam pelo **nome do cont
   ```bash
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
   ```
-- **API key** de um provider LLM (cada projeto precisa de um `opencode.json` — ver abaixo).
+- **API key** de um provider LLM e uma configuração de provider (global do usuário **ou** `opencode.json` no projeto — ver abaixo).
 
 ## Instalação
 
@@ -43,19 +43,33 @@ cd opencode-orchestration
 
 O `install.sh` (idempotente) faz:
 
-1. instala os launchers `dockercode` e `dockeragent` em `~/.local/bin`;
+1. instala os launchers `dockercode` e `dockeragent` (e a lib `dockercode-config.sh`) em `~/.local/bin`;
 2. copia a configuração para `~/.config/dockercode/` (plugin de tools, funções puras de formatação e o agente `Agent`);
 3. constrói as imagens `opencode-run` e `opencode-agent`;
 4. garante a rede `dockercode`.
 
 ## Configuração do provider (obrigatório)
 
-Cada projeto precisa de um `opencode.json` com o provider, pois é ele que o OpenCode lê (tanto o principal quanto os agentes):
+O OpenCode precisa de um provider configurado. Há duas formas de fornecer a configuração (elas podem ser
+combinadas):
 
-- **Principal**: o `opencode.json` na raiz do workspace (onde você roda `dockercode`).
-- **Agente**: o `opencode.json` dentro da pasta de cada serviço (o volume bind monta só aquela pasta).
+1. **Configuração do usuário (recomendada)** — um único `opencode.json` (ou `opencode.jsonc`) em
+   `~/.config/dockercode/`, usado por **todos** os projetos e serviços:
 
-O formato atual do V2 usa `providers` (plural). A chave **não** fica no JSON: declare o nome da variável em `env` e exporte a variável antes de subir os containers.
+   ```bash
+   mkdir -p ~/.config/dockercode
+   $EDITOR ~/.config/dockercode/opencode.json
+   ```
+
+   Os launchers montam esse arquivo como a configuração **global** do OpenCode dentro dos containers
+   (`/tmp/.config/opencode/opencode.json`), tanto no principal (`dockercode`) quanto nos agentes (`dockeragent`).
+
+2. **Configuração do projeto** — `opencode.json` na raiz do workspace (principal) e/ou na pasta de cada
+   serviço (agente). Continua suportada, mas agora é **opcional**: quando existe, o OpenCode faz merge com a
+   configuração global e o arquivo do projeto **tem precedência** sobre ela.
+
+O formato atual do V2 usa `providers` (plural). A chave **não** fica no JSON: declare o nome da variável em `env`
+e exporte a variável antes de subir os containers.
 
 Exemplo (`opencode.json`):
 
@@ -88,13 +102,38 @@ dockercode
 dockeragent
 ```
 
-Os launchers repassam a variável aos containers com `docker run -e OPENCODE_API_KEY`. Se preferir não deixá-la no ambiente do shell, use `settings.apiKey: "{env:OPENCODE_API_KEY}"` ou um `--env-file` com permissão `600`.
+Os launchers repassam a variável aos containers com `docker run -e OPENCODE_API_KEY`. Se preferir não deixá-la no
+ambiente do shell, use `settings.apiKey: "{env:OPENCODE_API_KEY}"` ou um `--env-file` com permissão `600`.
 
-> **Rotacione a chave antiga.** Versões anteriores deste projeto gravavam a chave em texto puro no `opencode.json`; se você usou esse formato, gere uma nova chave no console do provider e descarte a anterior.
+### Onde procurar a configuração do usuário
 
-O `opencode.json` está no `.gitignore`; não versione credenciais. O mesmo formato de `providers`/`env` vale para o `opencode.json` de cada serviço.
+Os launchers resolvem o arquivo nesta ordem:
 
-Sem esse arquivo (ou credencial) o `opencode serve` do agente não consegue responder.
+1. `DOCKERCODE_CONFIG_FILE` — caminho completo de um `opencode.json`/`opencode.jsonc`;
+2. `DOCKERCODE_CONFIG_DIR` — pasta que contenha `opencode.json` ou `opencode.jsonc`;
+3. `~/.config/dockercode/opencode.json` ou `~/.config/dockercode/opencode.jsonc` (padrão).
+
+Se `DOCKERCODE_CONFIG_FILE`/`DOCKERCODE_CONFIG_DIR` forem definidos mas inválidos (arquivo inexistente, nome
+diferente ou pasta sem configuração), o launcher aborta com erro. Sem nenhum arquivo do usuário e sem
+`opencode.json` no projeto, o launcher apenas avisa que o provider pode não estar configurado — o arquivo do
+projeto continua valendo sozinho.
+
+Para reaproveitar a configuração global que você já usa no host:
+
+```bash
+export DOCKERCODE_CONFIG_FILE="$HOME/.config/opencode/opencode.json"
+```
+
+O arquivo precisa se chamar `opencode.json` ou `opencode.jsonc`. Ele é montado como configuração global
+(precedência menor que a do projeto); caminhos com `{file:...}` são resolvidos **dentro do container** (`~` = `/tmp`).
+
+> **Rotacione a chave antiga.** Versões anteriores deste projeto gravavam a chave em texto puro no `opencode.json`;
+> se você usou esse formato, gere uma nova chave no console do provider e descarte a anterior.
+
+O `opencode.json` do projeto está no `.gitignore`; não versione credenciais. O mesmo formato de `providers`/`env`
+vale para a configuração do usuário e para a de cada serviço.
+
+Sem uma configuração (do usuário ou do projeto) ou credencial, o `opencode serve` do agente não consegue responder.
 
 ## Uso
 
@@ -196,14 +235,14 @@ Se nenhum modelo tiver sido escolhido ainda, a tool fixa o modelo padrão atual 
 
 ### Testes unitários
 
-As funções puras de formatação (`formatField`, `formatPermissionRequest`, `formatFormRequest`, `formatOutcome`, `resolveEffort`, `formatModelEfforts` e `formatEffortList`) ficam em `config/lib/service-format.ts` e são testadas com `node:test`:
+As funções puras de formatação (`formatField`, `formatPermissionRequest`, `formatFormRequest`, `formatOutcome`, `resolveEffort`, `formatModelEfforts` e `formatEffortList`) ficam em `config/lib/service-format.ts` e são testadas com `node:test`. A resolução da configuração global do usuário (`bin/dockercode-config.sh`) também tem testes, executados via bash:
 
 ```bash
 npm test
 # equivalente: node --test test/*.test.ts
 ```
 
-Requer Node 22.18+ (type stripping nativo; as imagens do projeto usam Node 26).
+Requer Node 22.18+ (type stripping nativo; as imagens do projeto usam Node 26) e bash para os testes dos launchers.
 
 ### Smoke end-to-end
 
@@ -214,14 +253,14 @@ O `scripts/smoke.sh` sobe (ou reutiliza) o agente de uma pasta de serviço, espe
 ./scripts/smoke.sh /caminho/do/servico "Responda apenas: ok"
 ```
 
-- Requer Docker e imagens instaladas (`./install.sh`). Se precisar subir o agente, também exige `OPENCODE_API_KEY` exportada e `opencode.json` na pasta do serviço; um agente já em execução é reutilizado sem essas checagens.
+- Requer Docker e imagens instaladas (`./install.sh`). Se precisar subir o agente, também exige `OPENCODE_API_KEY` exportada e uma configuração de provider (na pasta do serviço ou global do usuário); um agente já em execução é reutilizado sem essas checagens.
 - Se o agente já estiver rodando, ele é reutilizado e **não** é parado ao final; se o smoke subiu o container, ele é parado no `trap` de saída.
 - A espera máxima da tarefa é `120000` ms por padrão; ajuste com `SMOKE_MAX_WAIT_MS`. Os demais timeouts usam as variáveis `OPENCODE_AGENT_*`.
 - O harness `scripts/smoke.mjs` carrega `config/plugins/service.ts` com um stub de `@opencode/plugin` e chama as tools de verdade, sem depender do TUI.
 
 ## Permissões do agente
 
-O OpenCode v2, por padrão, **permite tudo** (só pergunta ao ler arquivos `.env`). Para o agente **pedir aprovação** antes de usar uma ferramenta (ex.: `shell`, `edit`), configure regras `permissions` com `effect: "ask"` no `opencode.json` **de cada serviço**:
+O OpenCode v2, por padrão, **permite tudo** (só pergunta ao ler arquivos `.env`). Para o agente **pedir aprovação** antes de usar uma ferramenta (ex.: `shell`, `edit`), configure regras `permissions` com `effect: "ask"` no `opencode.json` **de cada serviço** — ou na configuração global do usuário, se quiser o mesmo comportamento em todos os serviços:
 
 ```jsonc
 {
@@ -272,12 +311,14 @@ opencode-orchestration/
 │   └── OpencodeAgentDockerfile    # imagem opencode-agent (agente)
 ├── bin/
 │   ├── dockercode                 # launcher do principal
-│   └── dockeragent                # launcher do agente
+│   ├── dockeragent                # launcher do agente
+│   └── dockercode-config.sh       # resolve a config global do usuário (sourced)
 ├── scripts/
 │   ├── smoke.sh                   # smoke end-to-end (sobe/reutiliza o agente)
 │   └── smoke.mjs                  # harness que executa as tools
 ├── test/
-│   └── service-format.test.ts     # testes node:test das funções puras
+│   ├── service-format.test.ts     # testes node:test das funções puras
+│   └── launcher-config.test.ts    # testes da config global do usuário (bash)
 └── config/
     ├── plugins/service.ts         # plugin que registra as tools service / service_*
     ├── lib/service-format.ts      # funções puras de formatação (testáveis)
@@ -308,6 +349,7 @@ A senha é compartilhada: o `dockeragent` gera `~/.config/dockercode/agent-passw
 
 ## Personalização
 
+- **Configuração global do usuário**: `~/.config/dockercode/opencode.json(c)` vale para o principal e para todos os agentes. Use `DOCKERCODE_CONFIG_FILE` (arquivo) ou `DOCKERCODE_CONFIG_DIR` (pasta) para apontar para outro local. O `opencode.json` do projeto, quando existe, tem precedência.
 - **Porta do agente**: fixa em `4096`. O agente é o único que escuta; o principal apenas consome, sem publicar porta no host.
 - **Credencial do provider**: fica fora do `opencode.json`; exporte `OPENCODE_API_KEY` antes de rodar `dockercode`/`dockeragent` (ou use `settings.apiKey: "{env:OPENCODE_API_KEY}"` e um `--env-file` com permissão `600`).
 - **Timeouts**: `OPENCODE_AGENT_MAX_WAIT_MS` (espera máxima por tarefa, padrão `900000` = 15 min), `OPENCODE_AGENT_REQUEST_TIMEOUT_MS` (timeout de cada requisição HTTP, padrão `30000` = 30 s) e `OPENCODE_AGENT_POLL_INTERVAL_MS` (intervalo de polling, padrão `500`). Valores inválidos (vazio, `abc`, `0`, negativo ou infinito) usam o padrão.
@@ -322,18 +364,21 @@ A senha é compartilhada: o `dockeragent` gera `~/.config/dockercode/agent-passw
 - **`unexpected server error` ao enviar qualquer prompt no principal**: a tool (plugin) não carregou. Este projeto fixa `@opencode/cli@2.1.1`; se trocar a versão, o formato de plugin pode mudar (as tools são registradas via `@opencode/plugin` + `ctx.tool.transform`).
 - **O modo `Agent` não aparece ao trocar de agente**: confira se `~/.config/dockercode/agents/agent.md` existe (reinstale com `./install.sh`) e reinicie a sessão principal — agentes são carregados na inicialização. Para trocar de agente use **Shift+Tab**, `/agents` ou `Ctrl+X` + `A` (`Tab` é autocomplete no V2).
 - **Agente não responde**: confira se o container do agente está de pé (`docker ps`), se está na rede `dockercode` e se o nome bate com o usado no comando.
-- **`dockeragent` falha no health check**: o launcher imprime as últimas 50 linhas de `docker logs`, para o container e sai com erro. Verifique `OPENCODE_API_KEY`, o `opencode.json` da pasta do serviço e a porta interna `4096`.
+- **`dockeragent` falha no health check**: o launcher imprime as últimas 50 linhas de `docker logs`, para o container e sai com erro. Verifique `OPENCODE_API_KEY`, a configuração do provider (`opencode.json` da pasta do serviço ou global do usuário) e a porta interna `4096`.
 - **Já existe um container com o nome**: para um agente, pare/remova o container anterior (`docker stop <nome>` ou `docker rm <nome>`). Para o principal, encerre a outra sessão `dockercode` que está usando o mesmo workspace.
-- **Modelos não aparecem / erro de credencial**: confirme que `OPENCODE_API_KEY` está exportada no shell que rodou o launcher, que o `opencode.json` usa `providers` (plural) e que a chave antiga foi rotacionada. Teste no principal com `opencode api get /api/model` e, para um serviço, com a tool `service_models`.
-- **`scripts/smoke.sh` falha**: confirme a imagem `opencode-run`, a rede `dockercode` e, se o agente for subido pelo script, `OPENCODE_API_KEY` e o `opencode.json` da pasta do serviço; o script mostra os logs do agente quando `/api/info` não responde. Para permissões/formulários pendentes, o smoke falha de propósito em vez de responder sozinho.
+- **Modelos não aparecem / erro de credencial**: confirme que `OPENCODE_API_KEY` está exportada no shell que rodou o launcher, que a configuração (do usuário ou do projeto) usa `providers` (plural) e que a chave antiga foi rotacionada. Teste no principal com `opencode api get /api/model` e, para um serviço, com a tool `service_models`. Se um `opencode.json` do projeto existir, ele tem precedência sobre a configuração global.
+- **A configuração do usuário não é usada**: confirme o nome (`opencode.json` ou `opencode.jsonc`) e o caminho (`~/.config/dockercode/` por padrão, ou `DOCKERCODE_CONFIG_FILE`/`DOCKERCODE_CONFIG_DIR`); os launchers mostram a linha `config do usuário: ...` ao iniciar. O arquivo é montado como config global em `/tmp/.config/opencode/opencode.json(c)`; no agente ele é montado como arquivo único e somente leitura, então reinicie o container (`docker stop <nome>` e `dockeragent`) depois de editá-lo.
+- **`scripts/smoke.sh` falha**: confirme a imagem `opencode-run`, a rede `dockercode` e, se o agente for subido pelo script, `OPENCODE_API_KEY` e a configuração do provider (pasta do serviço ou global do usuário); o script mostra os logs do agente quando `/api/info` não responde. Para permissões/formulários pendentes, o smoke falha de propósito em vez de responder sozinho.
 - **Tools/comando não aparecem após instalar**: reinicie a sessão principal (`dockercode`) — tools e commands são carregados na inicialização.
 - **Porta `4096`**: é interna à rede `dockercode`; conflitos de porta no host não a afetam. Se o agente não responder nessa porta, veja `docker logs <nome>` e confirme que ele está na rede.
 
 ## Desinstalar
 
 ```bash
-rm -f ~/.local/bin/dockercode ~/.local/bin/dockeragent
+rm -f ~/.local/bin/dockercode ~/.local/bin/dockeragent ~/.local/bin/dockercode-config.sh
 rm -rf ~/.config/dockercode
 docker rmi opencode-run opencode-agent
 docker network rm dockercode
 ```
+
+> O `rm -rf ~/.config/dockercode` também remove a configuração global do usuário (`opencode.json`/`opencode.jsonc`), se você a mantém lá. Faça backup antes se quiser reaproveitá-la.

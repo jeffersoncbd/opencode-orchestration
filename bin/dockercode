@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=dockercode-config.sh
+source "$BIN_DIR/dockercode-config.sh"
+
 docker network inspect dockercode >/dev/null 2>&1 || docker network create dockercode
 
 base="$(basename "$PWD")"
@@ -26,9 +30,33 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Monta os itens de ~/.config/dockercode (plugins, lib, agents, ...) e a
+# configuração do usuário em /tmp/.config/opencode. Montar item a item evita
+# binds aninhados: um arquivo de config fora da pasta não cria mount points no host.
 config_mount=()
-if [[ -d "$HOME/.config/dockercode" ]]; then
-  config_mount=(-v "$HOME/.config/dockercode:/tmp/.config/opencode")
+config_root="$HOME/.config/dockercode"
+if [[ -d "$config_root" ]]; then
+  config_root="$(cd "$config_root" && pwd -P)"
+  shopt -s nullglob dotglob
+  for entry in "$config_root"/*; do
+    entry_name="$(basename "$entry")"
+    case "$entry_name" in
+      opencode.json | opencode.jsonc) continue ;;
+    esac
+    config_mount+=(-v "$entry:/tmp/.config/opencode/$entry_name")
+  done
+  shopt -u nullglob dotglob
+fi
+
+user_config_mount=()
+for config_file in ${USER_CONFIGS[@]+"${USER_CONFIGS[@]}"}; do
+  user_config_mount+=(-v "$config_file:/tmp/.config/opencode/$(basename "$config_file")")
+done
+
+if [[ ${#USER_CONFIGS[@]} -gt 0 ]]; then
+  echo "config do usuário: ${USER_CONFIGS[*]}" >&2
+elif ! _dockercode_has_project_config "$PWD"; then
+  echo "aviso: nenhum opencode.json encontrado no projeto nem em '${USER_CONFIG_DIR:-$HOME/.config/dockercode}'." >&2
 fi
 
 password_env=()
@@ -43,6 +71,7 @@ exec docker run -it --rm \
   -e HOME=/tmp \
   -v "$PWD":/workspace \
   ${config_mount[@]+"${config_mount[@]}"} \
+  ${user_config_mount[@]+"${user_config_mount[@]}"} \
   ${password_env[@]+"${password_env[@]}"} \
   -e OPENCODE_API_KEY \
   ${opts[@]+"${opts[@]}"} \

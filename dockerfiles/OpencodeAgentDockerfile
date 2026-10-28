@@ -12,7 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN npm install -g @opencode/cli@2.1.1
 
-RUN mkdir -p /workspace /volume && chown -R node:node /workspace /volume
+RUN mkdir -p /workspace /volume /tmp/.config/opencode \
+    && chown -R node:node /workspace /volume /tmp/.config \
+    && chmod 1777 /tmp/.config/opencode
 
 USER node
 WORKDIR /workspace
