@@ -11,7 +11,10 @@ Use quando você tem um workspace com vários serviços (cada um com seu própri
 | **Principal** | `opencode-run` | `dockercode` | Sessão única que **consome** os agentes. Roda o TUI do OpenCode. |
 | **Agente** | `opencode-agent` | `dockeragent` | Um container por serviço. Expõe o OpenCode via HTTP (`opencode serve`), **sem** capacidade de conectar em outros. |
 
-Todos compartilham a rede Docker `dockercode` e se alcançam pelo **nome do container** (`http://<serviço>:4096`).
+As imagens padrão podem ser trocadas por projeto (imagem estendida com dependências extras) — veja
+[Imagens personalizadas](#imagens-personalizadas-dependências-do-projeto).
+
+Nenhum container entra em uma rede Docker fixa: passe `--network <rede>` ao `dockercode` e ao `dockeragent` (os argumentos antes de `--` são repassados ao `docker run`). Para se alcançarem pelo **nome do container** (`http://<serviço>:4096`), principal e agentes precisam estar na **mesma rede**.
 
 ```
 [sessão principal]  dockercode
@@ -45,8 +48,13 @@ O `install.sh` (idempotente) faz:
 
 1. instala os launchers `dockercode` e `dockeragent` (e a lib `dockercode-config.sh`) em `~/.local/bin`;
 2. copia a configuração para `~/.config/dockercode/` (plugin de tools, funções puras de formatação e o agente `Agent`);
-3. constrói as imagens `opencode-run` e `opencode-agent`;
-4. garante a rede `dockercode`.
+3. constrói as imagens `opencode-run` e `opencode-agent`.
+
+A rede Docker **não** é criada pelo instalador. Crie a sua e passe `--network <rede>` aos launchers:
+
+```bash
+docker network create minha-rede
+```
 
 ## Configuração do provider (obrigatório)
 
@@ -142,8 +150,8 @@ Sem uma configuração (do usuário ou do projeto) ou credencial, o `opencode se
 Dentro de cada pasta de serviço:
 
 ```bash
-cd projeto-x/servico-a && dockeragent
-cd projeto-x/servico-b && dockeragent
+cd projeto-x/servico-a && dockeragent --network minha-rede
+cd projeto-x/servico-b && dockeragent --network minha-rede
 ```
 
 O agente sobe **detached** e, depois que `/api/info` responde (health check de até 10s), imprime o endereço:
@@ -158,17 +166,17 @@ O nome do container é o nome da pasta. Se já existir um container com esse nom
 
 Parar: `docker stop servico-a`.
 
-Argumentos antes de `--` são repassados ao `docker run`; argumentos depois de `--` substituem o comando padrão do container, como no `dockercode`. Nesse caso o health check é omitido (use apenas para depuração).
+Argumentos antes de `--` são repassados ao `docker run` — use `--network <rede>` para colocar o agente em uma rede (sem isso, ele não é alcançável pelo principal). Argumentos depois de `--` substituem o comando padrão do container, como no `dockercode`. Nesse caso o health check é omitido (use apenas para depuração).
 
 ### 2. Abrir a sessão principal
 
 Na raiz do workspace:
 
 ```bash
-cd projeto-x && dockercode
+cd projeto-x && dockercode --network minha-rede
 ```
 
-O container principal chama-se `dockercode-<pasta>` para não colidir com os nomes dos serviços. Se já existir um container com esse nome, o launcher aborta; encerre a outra sessão principal antes.
+Use a mesma rede dos agentes para que o principal os alcance pelo nome do container. O container principal chama-se `dockercode-<pasta>` para não colidir com os nomes dos serviços. Se já existir um container com esse nome, o launcher aborta; encerre a outra sessão principal antes.
 
 ### 3. Falar com um serviço (modo `Agent`)
 
@@ -211,6 +219,54 @@ service_setEffort { service: "servico-a", effort: "default" }  # volta ao padrã
 O esforço fica persistido junto com o modelo e é aplicado imediatamente se o serviço já tiver uma sessão.
 Se nenhum modelo tiver sido escolhido ainda, a tool fixa o modelo padrão atual para poder aplicar o esforço.
 
+## Imagens personalizadas (dependências do projeto)
+
+Se o projeto precisa de dependências que não estão nas imagens padrão, estenda a imagem e aponte os
+launchers para ela — sem editar os scripts. As duas imagens padrão são idênticas exceto pelo comando
+inicial, e os launchers passam o comando explicitamente (`opencode` no principal, `opencode serve ...` no
+agente), então a **mesma imagem estendida** serve para os dois.
+
+```dockerfile
+# Dockerfile na raiz do projeto
+FROM opencode-run
+RUN apt-get update && apt-get install -y --no-install-recommends libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN npm install -g alguma-cli
+```
+
+```bash
+docker build -t meuprojeto/opencode:dev .
+```
+
+A imagem é resolvida nesta ordem (a primeira que existir vence):
+
+1. `DOCKERCODE_IMAGE` (principal) e `DOCKERCODE_AGENT_IMAGE` (agente), no ambiente;
+2. `.dockercode/image` no projeto — uma linha com o nome da imagem (`#` inicia comentário, linhas vazias
+   são ignoradas);
+3. `.dockercode/agent-image`, só para o agente, quando ele precisa de uma imagem diferente;
+4. padrão: `opencode-run` / `opencode-agent`.
+
+O arquivo é procurado a partir do diretório atual e nos diretórios pais (até `$HOME`, exclusive), então um
+único `.dockercode/image` na raiz do workspace vale também para os serviços em subpastas:
+
+```bash
+cd projeto-x
+mkdir -p .dockercode
+echo 'meuprojeto/opencode:dev' > .dockercode/image
+
+dockercode --network minha-rede
+cd servico-a && dockeragent --network minha-rede   # mesma imagem do workspace
+```
+
+Observações:
+
+- **Não troque `USER`/`WORKDIR` nem defina `ENTRYPOINT`** na imagem derivada; o launcher já passa o comando.
+  Mantenha `curl` instalado (o health check do agente usa `docker exec ... curl`).
+- Rebuild a imagem derivada quando a imagem base mudar (`install.sh` reconstrói só `opencode-run`/`opencode-agent`).
+- Um arquivo `.dockercode/image` vazio ou com nome inválido (ex.: começando com `-`) aborta o launcher com erro,
+  em vez de deixar o valor virar flag do `docker run`.
+- O launcher confere `docker image inspect` antes de subir e mostra a imagem usada (`imagem: ...` no stderr).
+
 ## Estado e sessões
 
 - Sessão, modelo, esforço e início da última tarefa de cada serviço ficam em `/tmp/opencode-agent/sessions.json` **dentro do container principal** (vida = duração do `dockercode`). A gravação é serializada e atômica (arquivo temporário + `rename`), com permissão `0600`.
@@ -227,7 +283,7 @@ Se nenhum modelo tiver sido escolhido ainda, a tool fixa o modelo padrão atual 
 
 - **Uma tarefa por serviço.** Enquanto uma execução estiver em andamento — inclusive depois de um timeout —, novas chamadas a `service` para o mesmo serviço são recusadas. Acompanhe com `service_status` e cancele com `service_interrupt`.
 - **Estado volátil.** Sessão, modelo, esforço e início da última tarefa ficam em `/tmp/opencode-agent/sessions.json` dentro do container principal. O arquivo é perdido quando o `dockercode` encerra, e o controle de tarefa pendente também é em memória: após reiniciar o principal, use `service_status`/`service_reset` para reconciliar o estado com o agente.
-- **Porta fixa.** O agente escuta somente em `4096`, na rede interna `dockercode`; não há publicação de porta no host. Um serviço = um container = um nome de serviço.
+- **Porta fixa.** O agente escuta somente em `4096`, na rede Docker escolhida via `--network`; não há publicação de porta no host. Um serviço = um container = um nome de serviço.
 - **Formulários em lote.** `formID: "*"` só é aceito com `cancel: true`. Não é possível responder vários formulários com o mesmo `answer`, pois os campos podem ser diferentes.
 - **Apenas o principal orquestra.** Os agentes não chamam uns aos outros; as tools `service_*` existem somente na sessão principal.
 
@@ -249,11 +305,13 @@ Requer Node 22.18+ (type stripping nativo; as imagens do projeto usam Node 26) e
 O `scripts/smoke.sh` sobe (ou reutiliza) o agente de uma pasta de serviço, espera `/api/info` e executa as tools reais `service_models`, `service_efforts`, `service` (tarefa simples), `service_status` e `service_setEffort` (volta ao esforço padrão):
 
 ```bash
+export OPENCODE_SMOKE_NETWORK=minha-rede
 ./scripts/smoke.sh /caminho/do/servico
 ./scripts/smoke.sh /caminho/do/servico "Responda apenas: ok"
 ```
 
-- Requer Docker e imagens instaladas (`./install.sh`). Se precisar subir o agente, também exige `OPENCODE_API_KEY` exportada e uma configuração de provider (na pasta do serviço ou global do usuário); um agente já em execução é reutilizado sem essas checagens.
+- `OPENCODE_SMOKE_NETWORK` é **obrigatória**: é a rede usada pelo agente e pelo harness. Se o smoke subir o agente, ele passa `--network "$OPENCODE_SMOKE_NETWORK"` ao `dockeragent`; se o agente já estiver rodando, ele precisa estar nessa mesma rede.
+- Requer Docker e imagens instaladas (`./install.sh`). Se precisar subir o agente, também exige `OPENCODE_API_KEY` exportada e uma configuração de provider (na pasta do serviço ou global do usuário); um agente já em execução é reutilizado (mas precisa estar na rede informada) sem essas checagens.
 - Se o agente já estiver rodando, ele é reutilizado e **não** é parado ao final; se o smoke subiu o container, ele é parado no `trap` de saída.
 - A espera máxima da tarefa é `120000` ms por padrão; ajuste com `SMOKE_MAX_WAIT_MS`. Os demais timeouts usam as variáveis `OPENCODE_AGENT_*`.
 - O harness `scripts/smoke.mjs` carrega `config/plugins/service.ts` com um stub de `@opencode/plugin` e chama as tools de verdade, sem depender do TUI.
@@ -318,7 +376,8 @@ opencode-orchestration/
 │   └── smoke.mjs                  # harness que executa as tools
 ├── test/
 │   ├── service-format.test.ts     # testes node:test das funções puras
-│   └── launcher-config.test.ts    # testes da config global do usuário (bash)
+│   ├── launcher-config.test.ts    # testes da config global do usuário (bash)
+│   └── launcher-image.test.ts     # testes da resolução de imagem (bash + docker falso)
 └── config/
     ├── plugins/service.ts         # plugin que registra as tools service / service_*
     ├── lib/service-format.ts      # funções puras de formatação (testáveis)
@@ -349,6 +408,7 @@ A senha é compartilhada: o `dockeragent` gera `~/.config/dockercode/agent-passw
 
 ## Personalização
 
+- **Imagem do container**: por padrão `opencode-run` (principal) e `opencode-agent` (agente). Para incluir dependências do projeto, estenda a imagem e aponte com `DOCKERCODE_IMAGE`/`DOCKERCODE_AGENT_IMAGE` ou `.dockercode/image` — veja [Imagens personalizadas](#imagens-personalizadas-dependências-do-projeto).
 - **Configuração global do usuário**: `~/.config/dockercode/opencode.json(c)` vale para o principal e para todos os agentes. Use `DOCKERCODE_CONFIG_FILE` (arquivo) ou `DOCKERCODE_CONFIG_DIR` (pasta) para apontar para outro local. O `opencode.json` do projeto, quando existe, tem precedência.
 - **Porta do agente**: fixa em `4096`. O agente é o único que escuta; o principal apenas consome, sem publicar porta no host.
 - **Credencial do provider**: fica fora do `opencode.json`; exporte `OPENCODE_API_KEY` antes de rodar `dockercode`/`dockeragent` (ou use `settings.apiKey: "{env:OPENCODE_API_KEY}"` e um `--env-file` com permissão `600`).
@@ -363,14 +423,15 @@ A senha é compartilhada: o `dockeragent` gera `~/.config/dockercode/agent-passw
 
 - **`unexpected server error` ao enviar qualquer prompt no principal**: a tool (plugin) não carregou. Este projeto fixa `@opencode/cli@2.1.1`; se trocar a versão, o formato de plugin pode mudar (as tools são registradas via `@opencode/plugin` + `ctx.tool.transform`).
 - **O modo `Agent` não aparece ao trocar de agente**: confira se `~/.config/dockercode/agents/agent.md` existe (reinstale com `./install.sh`) e reinicie a sessão principal — agentes são carregados na inicialização. Para trocar de agente use **Shift+Tab**, `/agents` ou `Ctrl+X` + `A` (`Tab` é autocomplete no V2).
-- **Agente não responde**: confira se o container do agente está de pé (`docker ps`), se está na rede `dockercode` e se o nome bate com o usado no comando.
-- **`dockeragent` falha no health check**: o launcher imprime as últimas 50 linhas de `docker logs`, para o container e sai com erro. Verifique `OPENCODE_API_KEY`, a configuração do provider (`opencode.json` da pasta do serviço ou global do usuário) e a porta interna `4096`.
+- **Agente não responde**: confira se o container do agente está de pé (`docker ps`), se ele e o principal estão na mesma rede Docker (a passada via `--network` aos dois) e se o nome bate com o usado no comando.
+- **Dependência ausente no container** (`command not found`, `ModuleNotFoundError`, biblioteca nativa): a imagem padrão só traz `bash`, `build-essential`, `curl`, `git`, `python3`/`pip`/`venv` e o OpenCode. Estenda a imagem (`FROM opencode-run`) e aponte com `.dockercode/image` ou `DOCKERCODE_IMAGE`/`DOCKERCODE_AGENT_IMAGE` — veja [Imagens personalizadas](#imagens-personalizadas-dependências-do-projeto). Não instale em volumes do host (`node_modules`/`venv`): o ABI/glibc da imagem é diferente do host.
+- **`dockeragent` falha no health check**: o launcher imprime as últimas 50 linhas de `docker logs`, para o container e sai com erro. Verifique `OPENCODE_API_KEY`, a configuração do provider (`opencode.json` da pasta do serviço ou global do usuário), a imagem usada (linha `imagem: ...`) e a porta interna `4096`.
 - **Já existe um container com o nome**: para um agente, pare/remova o container anterior (`docker stop <nome>` ou `docker rm <nome>`). Para o principal, encerre a outra sessão `dockercode` que está usando o mesmo workspace.
 - **Modelos não aparecem / erro de credencial**: confirme que `OPENCODE_API_KEY` está exportada no shell que rodou o launcher, que a configuração (do usuário ou do projeto) usa `providers` (plural) e que a chave antiga foi rotacionada. Teste no principal com `opencode api get /api/model` e, para um serviço, com a tool `service_models`. Se um `opencode.json` do projeto existir, ele tem precedência sobre a configuração global.
 - **A configuração do usuário não é usada**: confirme o nome (`opencode.json` ou `opencode.jsonc`) e o caminho (`~/.config/dockercode/` por padrão, ou `DOCKERCODE_CONFIG_FILE`/`DOCKERCODE_CONFIG_DIR`); os launchers mostram a linha `config do usuário: ...` ao iniciar. O arquivo é montado como config global em `/tmp/.config/opencode/opencode.json(c)`; no agente ele é montado como arquivo único e somente leitura, então reinicie o container (`docker stop <nome>` e `dockeragent`) depois de editá-lo.
-- **`scripts/smoke.sh` falha**: confirme a imagem `opencode-run`, a rede `dockercode` e, se o agente for subido pelo script, `OPENCODE_API_KEY` e a configuração do provider (pasta do serviço ou global do usuário); o script mostra os logs do agente quando `/api/info` não responde. Para permissões/formulários pendentes, o smoke falha de propósito em vez de responder sozinho.
+- **`scripts/smoke.sh` falha**: confirme a imagem `opencode-run`, se `OPENCODE_SMOKE_NETWORK` aponta para uma rede existente e se o agente está nela e, se o agente for subido pelo script, `OPENCODE_API_KEY` e a configuração do provider (pasta do serviço ou global do usuário); o script mostra os logs do agente quando `/api/info` não responde. Para permissões/formulários pendentes, o smoke falha de propósito em vez de responder sozinho.
 - **Tools/comando não aparecem após instalar**: reinicie a sessão principal (`dockercode`) — tools e commands são carregados na inicialização.
-- **Porta `4096`**: é interna à rede `dockercode`; conflitos de porta no host não a afetam. Se o agente não responder nessa porta, veja `docker logs <nome>` e confirme que ele está na rede.
+- **Porta `4096`**: é interna à rede Docker escolhida via `--network`; conflitos de porta no host não a afetam. Se o agente não responder nessa porta, veja `docker logs <nome>` e confirme que ele está na mesma rede do principal.
 
 ## Desinstalar
 
@@ -378,7 +439,6 @@ A senha é compartilhada: o `dockeragent` gera `~/.config/dockercode/agent-passw
 rm -f ~/.local/bin/dockercode ~/.local/bin/dockeragent ~/.local/bin/dockercode-config.sh
 rm -rf ~/.config/dockercode
 docker rmi opencode-run opencode-agent
-docker network rm dockercode
 ```
 
 > O `rm -rf ~/.config/dockercode` também remove a configuração global do usuário (`opencode.json`/`opencode.jsonc`), se você a mantém lá. Faça backup antes se quiser reaproveitá-la.

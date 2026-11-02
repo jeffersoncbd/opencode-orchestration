@@ -5,8 +5,6 @@ BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=dockercode-config.sh
 source "$BIN_DIR/dockercode-config.sh"
 
-docker network inspect dockercode >/dev/null 2>&1 || docker network create dockercode
-
 base="$(basename "$PWD")"
 if ! [[ "$base" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
   echo "erro: o nome da pasta '$base' não é válido para o container principal." >&2
@@ -21,14 +19,31 @@ if docker container inspect "$name" >/dev/null 2>&1; then
 fi
 
 opts=()
-cmd=(opencode-run opencode)
+cmd=(opencode)
+custom_cmd=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --) shift; cmd=("$@"); break ;;
+    --)
+      shift
+      if [[ $# -gt 0 ]]; then
+        cmd=("$@")
+        custom_cmd=true
+      fi
+      break
+      ;;
     *) opts+=("$1"); shift ;;
   esac
 done
+
+# Imagem: DOCKERCODE_IMAGE > .dockercode/image (PWD ou ancestral) > opencode-run.
+image="$(_dockercode_resolve_image "$PWD" opencode-run "${DOCKERCODE_IMAGE:-}" image)"
+
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  echo "erro: imagem '$image' não encontrada." >&2
+  echo "construa-a e aponte em .dockercode/image (ou DOCKERCODE_IMAGE), ou rode ./install.sh para a imagem padrão." >&2
+  exit 1
+fi
 
 # Monta os itens de ~/.config/dockercode (plugins, lib, agents, ...) e a
 # configuração do usuário em /tmp/.config/opencode. Montar item a item evita
@@ -64,9 +79,13 @@ if [[ -f "$HOME/.config/dockercode/agent-password" ]]; then
   password_env=(-e "OPENCODE_AGENT_PASSWORD=$(cat "$HOME/.config/dockercode/agent-password")")
 fi
 
+echo "imagem: $image" >&2
+if [[ "$custom_cmd" == true ]]; then
+  echo "comando customizado: ${cmd[*]}" >&2
+fi
+
 exec docker run -it --rm \
   --name "$name" \
-  --network dockercode \
   -u "$(id -u):$(id -g)" \
   -e HOME=/tmp \
   -v "$PWD":/workspace \
@@ -75,4 +94,5 @@ exec docker run -it --rm \
   ${password_env[@]+"${password_env[@]}"} \
   -e OPENCODE_API_KEY \
   ${opts[@]+"${opts[@]}"} \
-  "${cmd[@]}"
+  "$image" \
+  ${cmd[@]+"${cmd[@]}"}

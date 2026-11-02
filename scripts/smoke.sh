@@ -4,8 +4,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=../bin/dockercode-config.sh
 source "$HERE/bin/dockercode-config.sh"
-NETWORK="${OPENCODE_SMOKE_NETWORK:-dockercode}"
-IMAGE="${OPENCODE_SMOKE_IMAGE:-opencode-run}"
+NETWORK="${OPENCODE_SMOKE_NETWORK:-}"
+IMAGE_ENV="${OPENCODE_SMOKE_IMAGE:-${DOCKERCODE_IMAGE:-}}"
 SERVICE_DIR="${1:-$PWD}"
 TASK="${2:-Responda apenas com a palavra: ok}"
 
@@ -21,12 +21,16 @@ Requer:
   - OPENCODE_API_KEY exportada;
   - opencode.json na pasta do serviço OU na configuração do usuário
     (~/.config/dockercode/opencode.json, ou DOCKERCODE_CONFIG_FILE/DIR);
-  - imagens instaladas (./install.sh) e rede dockercode.
+  - imagens instaladas (./install.sh);
+  - rede Docker definida em OPENCODE_SMOKE_NETWORK (usada pelo agente e pelo smoke).
 
 Variáveis opcionais:
-  OPENCODE_SMOKE_IMAGE   imagem do principal (padrão: opencode-run)
-  OPENCODE_SMOKE_NETWORK rede docker (padrão: dockercode)
+  OPENCODE_SMOKE_IMAGE   imagem do principal (padrão: DOCKERCODE_IMAGE ou opencode-run)
+  OPENCODE_SMOKE_NETWORK rede docker usada pelo agente e pelo smoke (obrigatória)
   SMOKE_MAX_WAIT_MS      espera máxima da tarefa (padrão: 120000)
+
+As imagens também seguem .dockercode/image (e .dockercode/agent-image para o agente),
+como nos launchers.
 EOF
 }
 
@@ -44,6 +48,10 @@ fi
 SERVICE_DIR="$(cd "$SERVICE_DIR" && pwd)"
 SERVICE="$(basename "$SERVICE_DIR")"
 
+# Imagens resolvidas como nos launchers (env > .dockercode/image > padrão).
+IMAGE="$(_dockercode_resolve_image "$SERVICE_DIR" opencode-run "$IMAGE_ENV" image)"
+AGENT_IMAGE="$(_dockercode_resolve_image "$SERVICE_DIR" opencode-agent "${DOCKERCODE_AGENT_IMAGE:-}" agent-image image)"
+
 if ! [[ "$SERVICE" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
   echo "erro: o nome da pasta '$SERVICE' não é um nome de serviço válido." >&2
   echo "use letras, números, '_', '.' e '-', começando por letra ou número." >&2
@@ -56,11 +64,15 @@ command -v docker >/dev/null 2>&1 || {
 }
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  echo "erro: imagem '$IMAGE' não encontrada; rode ./install.sh primeiro." >&2
+  echo "erro: imagem '$IMAGE' não encontrada; construa-a (ou rode ./install.sh)." >&2
+  exit 1
+fi
+if [[ -z "$NETWORK" ]]; then
+  echo "erro: defina OPENCODE_SMOKE_NETWORK com a rede Docker usada pelo agente e pelo smoke." >&2
   exit 1
 fi
 if ! docker network inspect "$NETWORK" >/dev/null 2>&1; then
-  echo "erro: rede '$NETWORK' não encontrada; rode ./install.sh primeiro." >&2
+  echo "erro: rede '$NETWORK' não encontrada; crie-a ou ajuste OPENCODE_SMOKE_NETWORK." >&2
   exit 1
 fi
 
@@ -91,8 +103,8 @@ else
     echo "erro: OPENCODE_API_KEY não está definida; exporte a chave antes de subir o agente." >&2
     exit 1
   fi
-  if ! docker image inspect opencode-agent >/dev/null 2>&1; then
-    echo "erro: imagem 'opencode-agent' não encontrada; rode ./install.sh primeiro." >&2
+  if ! docker image inspect "$AGENT_IMAGE" >/dev/null 2>&1; then
+    echo "erro: imagem '$AGENT_IMAGE' não encontrada; construa-a (ou rode ./install.sh)." >&2
     exit 1
   fi
 
@@ -106,8 +118,8 @@ else
     exit 1
   fi
 
-  echo "==> subindo o agente '$SERVICE' a partir de $SERVICE_DIR"
-  (cd "$SERVICE_DIR" && "$HERE/bin/dockeragent")
+  echo "==> subindo o agente '$SERVICE' a partir de $SERVICE_DIR (rede: $NETWORK)"
+  (cd "$SERVICE_DIR" && "$HERE/bin/dockeragent" --network "$NETWORK")
   STARTED_AGENT=true
 fi
 

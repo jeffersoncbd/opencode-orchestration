@@ -5,8 +5,6 @@ BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=dockercode-config.sh
 source "$BIN_DIR/dockercode-config.sh"
 
-docker network inspect dockercode >/dev/null 2>&1 || docker network create dockercode
-
 PASS_FILE="$HOME/.config/dockercode/agent-password"
 if [[ ! -f "$PASS_FILE" ]]; then
   mkdir -p "$(dirname "$PASS_FILE")"
@@ -28,14 +26,33 @@ if docker container inspect "$name" >/dev/null 2>&1; then
 fi
 
 opts=()
-cmd=()
+cmd=(opencode serve --hostname 0.0.0.0 --port 4096)
+custom_cmd=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --) shift; cmd=("$@"); break ;;
+    --)
+      shift
+      if [[ $# -gt 0 ]]; then
+        cmd=("$@")
+        custom_cmd=true
+      fi
+      break
+      ;;
     *) opts+=("$1"); shift ;;
   esac
 done
+
+# Imagem: DOCKERCODE_AGENT_IMAGE > .dockercode/agent-image > .dockercode/image >
+# opencode-agent. O comando é passado explicitamente, então a imagem estendida do
+# projeto (com dependências extras) serve tanto para o principal quanto para o agente.
+image="$(_dockercode_resolve_image "$PWD" opencode-agent "${DOCKERCODE_AGENT_IMAGE:-}" agent-image image)"
+
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  echo "erro: imagem '$image' não encontrada." >&2
+  echo "construa-a e aponte em .dockercode/agent-image (ou DOCKERCODE_AGENT_IMAGE), ou rode ./install.sh para a imagem padrão." >&2
+  exit 1
+fi
 
 # A configuração do usuário é montada como config global do agente
 # (/tmp/.config/opencode), sem trazer o plugin/agentes do principal.
@@ -52,7 +69,6 @@ fi
 
 docker run -d --rm \
   --name "$name" \
-  --network dockercode \
   -u "$(id -u):$(id -g)" \
   -e HOME=/tmp \
   -e "OPENCODE_SERVER_PASSWORD=$PASSWORD" \
@@ -60,11 +76,11 @@ docker run -d --rm \
   -v "$PWD":/workspace \
   ${user_config_mount[@]+"${user_config_mount[@]}"} \
   ${opts[@]+"${opts[@]}"} \
-  opencode-agent \
+  "$image" \
   ${cmd[@]+"${cmd[@]}"}
 
-# O comando padrão é o servidor do agente; comandos customizados (após --) não são checados.
-if [[ ${#cmd[@]} -eq 0 ]]; then
+# Comandos customizados (após --) não passam pelo health check.
+if [[ "$custom_cmd" != true ]]; then
   echo "aguardando o agente '$name' responder em /api/info..." >&2
   ready=false
   deadline=$((SECONDS + 10))
@@ -90,8 +106,8 @@ if [[ ${#cmd[@]} -eq 0 ]]; then
   fi
 fi
 
-if [[ ${#cmd[@]} -eq 0 ]]; then
-  echo "agente '$name' iniciado: http://${name}:4096 (logs: docker logs -f ${name})"
+if [[ "$custom_cmd" != true ]]; then
+  echo "agente '$name' iniciado: http://${name}:4096 (imagem: $image; logs: docker logs -f ${name})"
 else
-  echo "container '$name' iniciado com comando customizado (sem health check): docker logs -f ${name}"
+  echo "container '$name' iniciado com comando customizado (imagem: $image; sem health check): docker logs -f ${name}"
 fi

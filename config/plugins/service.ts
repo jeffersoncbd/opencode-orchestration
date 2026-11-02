@@ -885,7 +885,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na rede dockercode (ex.: servico-a)" },
+            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
             task: { type: "string", description: "Instrução ou tarefa a executar no agente do serviço" },
           },
           required: ["service", "task"],
@@ -909,7 +909,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na rede dockercode (ex.: servico-a)" },
+            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
           },
           required: ["service"],
           additionalProperties: false,
@@ -930,7 +930,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na rede dockercode (ex.: servico-a)" },
+            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
           },
           required: ["service"],
           additionalProperties: false,
@@ -951,7 +951,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na rede dockercode (ex.: servico-a)" },
+            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
             requestID: { type: "string", description: "id do pedido retornado pela tool 'service' (ex.: per_abc123), ou '*' para todos" },
             decision: {
               type: "string",
@@ -991,7 +991,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na rede dockercode (ex.: servico-a)" },
+            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
             formID: {
               type: "string",
               description: "id do formulário retornado pela tool 'service' (obrigatório para responder); '*' só com cancel: true",
@@ -1027,7 +1027,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na rede dockercode (ex.: servico-a)" },
+            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
           },
           required: ["service"],
           additionalProperties: false,
@@ -1048,7 +1048,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na rede dockercode (ex.: servico-a)" },
+            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
             model: {
               type: "string",
               description: "Opcional: modelo específico (nome ou 'provider/modelID') para listar os esforços",
@@ -1076,7 +1076,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na rede dockercode (ex.: servico-a)" },
+            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
             model: { type: "string", description: "Modelo a usar (nome, 'provider/modelID' ou 'provider/modelID#esforço')" },
           },
           required: ["service", "model"],
@@ -1126,7 +1126,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na rede dockercode (ex.: servico-a)" },
+            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
             effort: {
               type: "string",
               description: "Nível de esforço/variant (ex.: low, high, max) ou 'default' para o padrão do modelo",
@@ -1153,7 +1153,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na rede dockercode (ex.: servico-a)" },
+            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
             force: {
               type: "boolean",
               description: "true para limpar apenas o estado local, sem tentar remover a sessão no agente",

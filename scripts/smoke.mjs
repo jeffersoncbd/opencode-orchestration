@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Executa as tools reais do plugin contra um agente já acessível pela rede.
-// É chamado pelo scripts/smoke.sh dentro de um container da rede dockercode.
+// É chamado pelo scripts/smoke.sh dentro de um container da mesma rede do agente.
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"

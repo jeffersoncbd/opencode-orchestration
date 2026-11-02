@@ -23,13 +23,11 @@ install -m 644 "$HERE/config/agents/agent.md"          "$CONFIG_ROOT/agents/agen
 docker build -f "$HERE/dockerfiles/OpencodeRunDockerfile"   -t opencode-run   "$HERE"
 docker build -f "$HERE/dockerfiles/OpencodeAgentDockerfile" -t opencode-agent "$HERE"
 
-# 4. Rede
-docker network inspect dockercode >/dev/null 2>&1 || docker network create dockercode
-
 echo
 echo "opencode-orchestration instalado."
 echo "  principal:  dockercode   (na raiz do projeto)"
 echo "  agente:     dockeragent  (na pasta de cada serviço)"
+echo "  rede:       passe --network <rede> aos launchers (não há rede fixa)"
 if [[ -f "$CONFIG_ROOT/opencode.json" || -f "$CONFIG_ROOT/opencode.jsonc" ]]; then
   echo "  config:     $CONFIG_ROOT/opencode.json(c) (vale para todos os serviços)"
 else
