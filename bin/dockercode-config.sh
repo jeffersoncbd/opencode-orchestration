@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Resolve a configuração global opcional do usuário (opencode.json/jsonc).
-# É sourced por dockercode, dockeragent e scripts/smoke.sh; não é executado direto.
+# É sourced por oc-main, oc-agent e scripts/smoke.sh; não é executado direto.
 #
 # Precedência:
-#   1. DOCKERCODE_CONFIG_FILE (caminho completo)
-#   2. DOCKERCODE_CONFIG_DIR  (pasta com opencode.json ou opencode.jsonc)
+#   1. OC_CONFIG_FILE (caminho completo)
+#   2. OC_CONFIG_DIR  (pasta com opencode.json ou opencode.jsonc)
 #   3. ~/.config/dockercode   (padrão)
 #
 # Define:
@@ -26,32 +26,32 @@ _dockercode_collect_user_configs() {
   USER_CONFIGS=()
   USER_CONFIG_DIR=""
 
-  if [[ -n "${DOCKERCODE_CONFIG_FILE:-}" ]]; then
-    local file="$DOCKERCODE_CONFIG_FILE" base dir
+  if [[ -n "${OC_CONFIG_FILE:-}" ]]; then
+    local file="$OC_CONFIG_FILE" base dir
     base="$(basename "$file")"
     case "$base" in
       opencode.json | opencode.jsonc) ;;
       *)
         _dockercode_die \
-          "DOCKERCODE_CONFIG_FILE deve apontar para um arquivo chamado opencode.json ou opencode.jsonc (recebido: '$file')."
+          "OC_CONFIG_FILE deve apontar para um arquivo chamado opencode.json ou opencode.jsonc (recebido: '$file')."
         ;;
     esac
-    [[ -f "$file" ]] || _dockercode_die "DOCKERCODE_CONFIG_FILE='$file' não existe ou não é um arquivo regular."
+    [[ -f "$file" ]] || _dockercode_die "OC_CONFIG_FILE='$file' não existe ou não é um arquivo regular."
     dir="$(cd "$(dirname "$file")" && pwd -P)" ||
-      _dockercode_die "não foi possível resolver o diretório de DOCKERCODE_CONFIG_FILE='$file'."
+      _dockercode_die "não foi possível resolver o diretório de OC_CONFIG_FILE='$file'."
     USER_CONFIGS=("$dir/$base")
     USER_CONFIG_DIR="$dir"
     return 0
   fi
 
-  local dir="${DOCKERCODE_CONFIG_DIR:-$HOME/.config/dockercode}" name explicit=false
-  if [[ -n "${DOCKERCODE_CONFIG_DIR:-}" ]]; then
+  local dir="${OC_CONFIG_DIR:-$HOME/.config/dockercode}" name explicit=false
+  if [[ -n "${OC_CONFIG_DIR:-}" ]]; then
     explicit=true
   fi
 
   if [[ ! -d "$dir" ]]; then
     if [[ "$explicit" == true ]]; then
-      _dockercode_die "DOCKERCODE_CONFIG_DIR='$dir' não é um diretório."
+      _dockercode_die "OC_CONFIG_DIR='$dir' não é um diretório."
     fi
     return 0
   fi
@@ -65,7 +65,7 @@ _dockercode_collect_user_configs() {
   done
 
   if [[ "$explicit" == true && ${#USER_CONFIGS[@]} -eq 0 ]]; then
-    _dockercode_die "nenhum opencode.json ou opencode.jsonc encontrado em DOCKERCODE_CONFIG_DIR='$dir'."
+    _dockercode_die "nenhum opencode.json ou opencode.jsonc encontrado em OC_CONFIG_DIR='$dir'."
   fi
 }
 
@@ -84,7 +84,7 @@ _dockercode_has_project_config() {
 
 # Procura <dir>/.dockercode/<nome>, subindo diretório a diretório.
 # Para em $HOME (inclusive) e em /, então não existe imagem "global" implícita na
-# home: use DOCKERCODE_IMAGE/DOCKERCODE_AGENT_IMAGE para um padrão global.
+# home: use OC_MAIN_IMAGE/OC_AGENT_IMAGE para um padrão global.
 _dockercode_find_image_file() {
   local dir="$1" name="$2"
   while :; do
@@ -117,7 +117,7 @@ _dockercode_read_image_file() {
 _dockercode_validate_image() {
   local image="$1"
   if [[ -z "$image" ]]; then
-    _dockercode_die "imagem vazia (verifique DOCKERCODE_IMAGE/DOCKERCODE_AGENT_IMAGE ou .dockercode/image)."
+    _dockercode_die "imagem vazia (verifique OC_MAIN_IMAGE/OC_AGENT_IMAGE ou .dockercode/image)."
   fi
   if ! [[ "$image" =~ ^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$ ]]; then
     _dockercode_die "imagem inválida: '$image' (use letras, números, '.', '_', '/', ':', '@' e '-'; não comece com '-')."

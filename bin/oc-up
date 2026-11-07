@@ -1,0 +1,248 @@
+#!/usr/bin/env bash
+# Sobe o stack do projeto (agentes + container principal) a partir de
+# .oc-services (ou OC_STACK_FILE / --config) e, por padrão, abre a TUI.
+set -euo pipefail
+
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=dockercode-stack.sh
+source "$BIN_DIR/dockercode-stack.sh"
+
+usage() {
+  cat <<'EOF'
+uso: oc-up [opções]
+
+Sobe os agentes definidos em .oc-services, inicia o container principal
+na raiz do projeto e abre a TUI com `oc-run`.
+
+Opções:
+  --no-tui, --detach   sobe tudo em background e não abre a TUI
+  --no-main            sobe apenas os agentes (exige --no-tui)
+  --config <arquivo>   usa outro arquivo de stack
+  --print, --dry-run   apenas valida e mostra a configuração interpretada
+  -h, --help           esta ajuda
+
+Variáveis:
+  OC_STACK_FILE        caminho alternativo do arquivo de stack
+  OC_PROJECT           usado quando o arquivo não define `project`
+
+O arquivo é procurado como .oc-services a partir do diretório atual,
+subindo até $HOME (exclusive).
+EOF
+}
+
+open_tui=true
+start_main=true
+print_only=false
+config_file=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-tui | --detach) open_tui=false; shift ;;
+    --no-main) start_main=false; shift ;;
+    --config)
+      [[ $# -ge 2 ]] || { echo "erro: --config exige um arquivo." >&2; exit 2; }
+      config_file="$2"
+      shift 2
+      ;;
+    --print | --dry-run) print_only=true; shift ;;
+    -h | --help) usage; exit 0 ;;
+    *)
+      echo "erro: opção desconhecida: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "$open_tui" == true && "$start_main" != true ]]; then
+  echo "erro: --no-main exige --no-tui (a TUI precisa do container principal)." >&2
+  exit 2
+fi
+
+if [[ -n "$config_file" ]]; then
+  [[ -f "$config_file" ]] || {
+    echo "erro: arquivo de stack não encontrado: '$config_file'." >&2
+    exit 1
+  }
+  file="$(cd "$(dirname "$config_file")" && pwd -P)/$(basename "$config_file")"
+else
+  if ! file="$(_dockercode_stack_resolve "$PWD")"; then
+    echo "erro: arquivo .oc-services não encontrado a partir de '$PWD'." >&2
+    echo "crie o arquivo na raiz do projeto, defina OC_STACK_FILE ou use --config." >&2
+    exit 1
+  fi
+fi
+
+_dockercode_stack_load "$file"
+
+# OC_PROJECT no ambiente só é usado quando o arquivo não define `project`.
+if [[ "$STACK_PROJECT_EXPLICIT" != true && -n "${OC_PROJECT:-}" ]]; then
+  _dockercode_stack_validate_name "OC_PROJECT" "$OC_PROJECT"
+  STACK_PROJECT="$OC_PROJECT"
+fi
+
+if [[ "$print_only" == true ]]; then
+  _dockercode_stack_print
+  exit 0
+fi
+
+if [[ -z "$STACK_NETWORK" ]]; then
+  echo "aviso: nenhuma diretiva 'network' no stack; o principal pode não alcançar os agentes." >&2
+fi
+
+command -v docker >/dev/null 2>&1 || {
+  echo "erro: docker não encontrado no PATH." >&2
+  exit 1
+}
+
+resolve_launcher() {
+  local name="$1"
+  local candidate="$BIN_DIR/$name"
+  if [[ -x "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  command -v "$name" || return 1
+}
+
+oc_agent="$(resolve_launcher oc-agent)" || {
+  echo "erro: launcher 'oc-agent' não encontrado; rode ./install.sh." >&2
+  exit 1
+}
+
+oc_main=""
+if [[ "$start_main" == true ]]; then
+  oc_main="$(resolve_launcher oc-main)" || {
+    echo "erro: launcher 'oc-main' não encontrado; rode ./install.sh." >&2
+    exit 1
+  }
+fi
+
+oc_run=""
+if [[ "$open_tui" == true ]]; then
+  oc_run="$(resolve_launcher oc-run)" || {
+    echo "erro: launcher 'oc-run' não encontrado; rode ./install.sh." >&2
+    exit 1
+  }
+fi
+
+# Valida tudo antes de subir qualquer coisa (o oc-down não exige as pastas).
+for i in "${!STACK_SERVICE_NAMES[@]}"; do
+  service_dir="$STACK_ROOT/${STACK_SERVICE_DIRS[$i]}"
+  if [[ ! -d "$service_dir" ]]; then
+    echo "erro: pasta do serviço '${STACK_SERVICE_NAMES[$i]}' não encontrada: '$service_dir'." >&2
+    exit 1
+  fi
+done
+
+cd "$STACK_ROOT"
+
+main_name="$(basename "$STACK_ROOT")"
+started_main=false
+started_agents=()
+
+cleanup_on_error() {
+  local status=$?
+  trap - ERR
+  if (( status != 0 )); then
+    echo "erro: falha ao subir o stack; parando containers iniciados por este oc-up..." >&2
+    local i
+    for (( i = ${#started_agents[@]} - 1; i >= 0; i-- )); do
+      docker stop -t 2 "${started_agents[$i]}" >/dev/null 2>&1 || true
+    done
+    if [[ "$started_main" == true ]]; then
+      docker stop -t 2 "$main_name" >/dev/null 2>&1 || true
+    fi
+  fi
+  exit "$status"
+}
+
+if [[ ${#STACK_BEFORE_UP[@]} -gt 0 ]]; then
+  _dockercode_stack_run_hooks "before-up" "${STACK_BEFORE_UP[@]}"
+fi
+
+if [[ -n "$STACK_NETWORK" ]]; then
+  if ! docker network inspect "$STACK_NETWORK" >/dev/null 2>&1; then
+    echo "erro: rede Docker '$STACK_NETWORK' não encontrada." >&2
+    echo "crie-a (docker network create '$STACK_NETWORK') ou ajuste a diretiva 'network'." >&2
+    exit 1
+  fi
+fi
+
+main_args=()
+if [[ -n "$STACK_NETWORK" ]]; then
+  main_args+=(--network "$STACK_NETWORK")
+fi
+
+trap cleanup_on_error ERR
+
+if [[ "$start_main" == true ]]; then
+  if docker container inspect "$main_name" >/dev/null 2>&1; then
+    running="$(docker inspect -f '{{.State.Running}}' "$main_name" 2>/dev/null || true)"
+    if [[ "$running" == true ]]; then
+      echo "==> principal '$main_name' já está em execução; reutilizando" >&2
+    else
+      echo "erro: o container principal '$main_name' existe mas não está em execução." >&2
+      echo "remova-o (docker rm -f '$main_name') e rode 'oc-up' de novo." >&2
+      exit 1
+    fi
+  else
+    echo "==> subindo principal '$main_name'..." >&2
+    OC_PROJECT="$STACK_PROJECT" "$oc_main" ${main_args[@]+"${main_args[@]}"}
+    started_main=true
+  fi
+fi
+
+for i in "${!STACK_SERVICE_NAMES[@]}"; do
+  name="$STACK_PROJECT-${STACK_SERVICE_NAMES[$i]}"
+  if docker container inspect "$name" >/dev/null 2>&1; then
+    running="$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null || true)"
+    if [[ "$running" == true ]]; then
+      echo "==> agente '$name' já está em execução; reutilizando" >&2
+      continue
+    fi
+    echo "erro: o container '$name' existe mas não está em execução." >&2
+    echo "remova-o (docker rm -f '$name') e rode 'oc-up' de novo." >&2
+    exit 1
+  fi
+
+  service_args=()
+  serialized="${STACK_SERVICE_OPTS[$i]}"
+  if [[ -n "$serialized" ]]; then
+    eval "service_args=($serialized)"
+  fi
+
+  echo "==> subindo agente '$name' (${STACK_SERVICE_DIRS[$i]})..." >&2
+  started_agents+=("$name")
+  (
+    cd "$STACK_ROOT/${STACK_SERVICE_DIRS[$i]}"
+    OC_PROJECT="$STACK_PROJECT" "$oc_agent" ${service_args[@]+"${service_args[@]}"}
+  )
+done
+
+trap - ERR
+
+if [[ ${#STACK_AFTER_UP[@]} -gt 0 ]]; then
+  _dockercode_stack_run_hooks "after-up" "${STACK_AFTER_UP[@]}"
+fi
+
+echo
+echo "stack '$STACK_PROJECT' no ar"
+echo "  raiz:      $STACK_ROOT"
+if [[ "$start_main" == true ]]; then
+  echo "  principal: $main_name"
+else
+  echo "  principal: (não iniciado)"
+fi
+echo "  agentes:   ${#STACK_SERVICE_NAMES[@]} (prefixo: $STACK_PROJECT)"
+echo "  rede:      ${STACK_NETWORK:-<nenhuma>}"
+echo "  parar:     oc-down"
+if [[ "$open_tui" != true ]]; then
+  echo "  abrir:     oc-run"
+fi
+echo
+
+if [[ "$open_tui" == true ]]; then
+  echo "abrindo a TUI..." >&2
+  exec "$oc_run"
+fi

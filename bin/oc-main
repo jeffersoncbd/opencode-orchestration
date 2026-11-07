@@ -11,15 +11,24 @@ if ! [[ "$base" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
   echo "use letras, números, '_', '.' e '-', começando por letra ou número." >&2
   exit 1
 fi
-name="dockercode-$base"
+name="$base"
 if docker container inspect "$name" >/dev/null 2>&1; then
   echo "erro: já existe um container chamado '$name'." >&2
   echo "encerre a outra sessão principal (ou remova o container) e tente de novo." >&2
   exit 1
 fi
 
+# Prefixo dos agentes: OC_PROJECT (opcional, padrão = nome da pasta do projeto).
+project="${OC_PROJECT:-$base}"
+if ! [[ "$project" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+  echo "erro: OC_PROJECT='$project' não é um prefixo válido." >&2
+  echo "use letras, números, '_', '.' e '-', começando por letra ou número." >&2
+  exit 1
+fi
+
 opts=()
-cmd=(opencode)
+# Mantém o container vivo sem abrir a TUI; `oc-run` abre a interface depois.
+cmd=(sleep infinity)
 custom_cmd=false
 
 while [[ $# -gt 0 ]]; do
@@ -36,12 +45,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Imagem: DOCKERCODE_IMAGE > .dockercode/image (PWD ou ancestral) > opencode-run.
-image="$(_dockercode_resolve_image "$PWD" opencode-run "${DOCKERCODE_IMAGE:-}" image)"
+# Imagem: OC_MAIN_IMAGE > .dockercode/image (PWD ou ancestral) > oc-main.
+image="$(_dockercode_resolve_image "$PWD" oc-main "${OC_MAIN_IMAGE:-}" image)"
 
 if ! docker image inspect "$image" >/dev/null 2>&1; then
   echo "erro: imagem '$image' não encontrada." >&2
-  echo "construa-a e aponte em .dockercode/image (ou DOCKERCODE_IMAGE), ou rode ./install.sh para a imagem padrão." >&2
+  echo "construa-a e aponte em .dockercode/image (ou OC_MAIN_IMAGE), ou rode ./install.sh para a imagem padrão." >&2
   exit 1
 fi
 
@@ -80,14 +89,17 @@ if [[ -f "$HOME/.config/dockercode/agent-password" ]]; then
 fi
 
 echo "imagem: $image" >&2
+echo "prefixo dos agentes: $project" >&2
 if [[ "$custom_cmd" == true ]]; then
   echo "comando customizado: ${cmd[*]}" >&2
 fi
 
-exec docker run -it --rm \
+docker run -d --rm \
+  --init \
   --name "$name" \
   -u "$(id -u):$(id -g)" \
   -e HOME=/tmp \
+  -e "OC_PROJECT=$project" \
   -v "$PWD":/workspace \
   ${config_mount[@]+"${config_mount[@]}"} \
   ${user_config_mount[@]+"${user_config_mount[@]}"} \
@@ -95,4 +107,18 @@ exec docker run -it --rm \
   -e OPENCODE_API_KEY \
   ${opts[@]+"${opts[@]}"} \
   "$image" \
-  ${cmd[@]+"${cmd[@]}"}
+  ${cmd[@]+"${cmd[@]}"} >/dev/null
+
+if ! docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null | grep -q '^true$'; then
+  echo "erro: o container '$name' não ficou em execução." >&2
+  echo "--- docker logs --tail 50 $name ---" >&2
+  docker logs --tail 50 "$name" >&2 || true
+  exit 1
+fi
+
+if [[ "$custom_cmd" == true ]]; then
+  echo "container '$name' iniciado em background com comando customizado (imagem: $image; logs: docker logs -f $name)"
+else
+  echo "container '$name' iniciado em background (imagem: $image)."
+  echo "abra a interface com: oc-run"
+fi

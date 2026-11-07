@@ -5,7 +5,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=../bin/dockercode-config.sh
 source "$HERE/bin/dockercode-config.sh"
 NETWORK="${OPENCODE_SMOKE_NETWORK:-}"
-IMAGE_ENV="${OPENCODE_SMOKE_IMAGE:-${DOCKERCODE_IMAGE:-}}"
+IMAGE_ENV="${OPENCODE_SMOKE_IMAGE:-${OC_MAIN_IMAGE:-}}"
 SERVICE_DIR="${1:-$PWD}"
 TASK="${2:-Responda apenas com a palavra: ok}"
 
@@ -20,12 +20,13 @@ o agente, ele é parado ao final.
 Requer:
   - OPENCODE_API_KEY exportada;
   - opencode.json na pasta do serviço OU na configuração do usuário
-    (~/.config/dockercode/opencode.json, ou DOCKERCODE_CONFIG_FILE/DIR);
+    (~/.config/dockercode/opencode.json, ou OC_CONFIG_FILE/DIR);
   - imagens instaladas (./install.sh);
   - rede Docker definida em OPENCODE_SMOKE_NETWORK (usada pelo agente e pelo smoke).
 
 Variáveis opcionais:
-  OPENCODE_SMOKE_IMAGE   imagem do principal (padrão: DOCKERCODE_IMAGE ou opencode-run)
+  OC_PROJECT             prefixo do projeto (padrão: nome da pasta pai do serviço)
+  OPENCODE_SMOKE_IMAGE   imagem do principal (padrão: OC_MAIN_IMAGE ou oc-main)
   OPENCODE_SMOKE_NETWORK rede docker usada pelo agente e pelo smoke (obrigatória)
   SMOKE_MAX_WAIT_MS      espera máxima da tarefa (padrão: 120000)
 
@@ -47,14 +48,22 @@ if [[ ! -d "$SERVICE_DIR" ]]; then
 fi
 SERVICE_DIR="$(cd "$SERVICE_DIR" && pwd)"
 SERVICE="$(basename "$SERVICE_DIR")"
+PROJECT="${OC_PROJECT:-$(basename "$(dirname "$SERVICE_DIR")")}"
+CONTAINER="$PROJECT-$SERVICE"
 
 # Imagens resolvidas como nos launchers (env > .dockercode/image > padrão).
-IMAGE="$(_dockercode_resolve_image "$SERVICE_DIR" opencode-run "$IMAGE_ENV" image)"
-AGENT_IMAGE="$(_dockercode_resolve_image "$SERVICE_DIR" opencode-agent "${DOCKERCODE_AGENT_IMAGE:-}" agent-image image)"
+IMAGE="$(_dockercode_resolve_image "$SERVICE_DIR" oc-main "$IMAGE_ENV" image)"
+AGENT_IMAGE="$(_dockercode_resolve_image "$SERVICE_DIR" oc-agent "${OC_AGENT_IMAGE:-}" agent-image image)"
 
 if ! [[ "$SERVICE" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
   echo "erro: o nome da pasta '$SERVICE' não é um nome de serviço válido." >&2
   echo "use letras, números, '_', '.' e '-', começando por letra ou número." >&2
+  exit 1
+fi
+
+if ! [[ "$PROJECT" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+  echo "erro: prefixo do projeto inválido: '$PROJECT'." >&2
+  echo "defina OC_PROJECT com letras, números, '_', '.' e '-', começando por letra ou número." >&2
   exit 1
 fi
 
@@ -85,19 +94,19 @@ fi
 STARTED_AGENT=false
 cleanup() {
   if [[ "$STARTED_AGENT" == true ]]; then
-    echo "==> parando o agente '$SERVICE' (iniciado pelo smoke)" >&2
-    docker stop -t 2 "$SERVICE" >/dev/null 2>&1 || true
+    echo "==> parando o agente '$CONTAINER' (iniciado pelo smoke)" >&2
+    docker stop -t 2 "$CONTAINER" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
 
-if docker container inspect "$SERVICE" >/dev/null 2>&1; then
-  if [[ "$(docker inspect -f '{{.State.Running}}' "$SERVICE" 2>/dev/null)" != true ]]; then
-    echo "erro: já existe um container parado chamado '$SERVICE'." >&2
-    echo "remova-o (docker rm '$SERVICE') ou suba o agente novamente antes do smoke." >&2
+if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
+  if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" != true ]]; then
+    echo "erro: já existe um container parado chamado '$CONTAINER'." >&2
+    echo "remova-o (docker rm '$CONTAINER') ou suba o agente novamente antes do smoke." >&2
     exit 1
   fi
-  echo "==> reutilizando o agente '$SERVICE' já em execução"
+  echo "==> reutilizando o agente '$CONTAINER' já em execução"
 else
   if [[ -z "${OPENCODE_API_KEY:-}" ]]; then
     echo "erro: OPENCODE_API_KEY não está definida; exporte a chave antes de subir o agente." >&2
@@ -118,12 +127,12 @@ else
     exit 1
   fi
 
-  echo "==> subindo o agente '$SERVICE' a partir de $SERVICE_DIR (rede: $NETWORK)"
-  (cd "$SERVICE_DIR" && "$HERE/bin/dockeragent" --network "$NETWORK")
+  echo "==> subindo o agente '$CONTAINER' a partir de $SERVICE_DIR (rede: $NETWORK)"
+  (cd "$SERVICE_DIR" && OC_PROJECT="$PROJECT" "$HERE/bin/oc-agent" --network "$NETWORK")
   STARTED_AGENT=true
 fi
 
-echo "==> aguardando /api/info em '$SERVICE'"
+echo "==> aguardando /api/info em '$CONTAINER'"
 curl_auth=()
 if [[ -n "$PASSWORD" ]]; then
   curl_auth=(-u "opencode:$PASSWORD")
@@ -132,26 +141,27 @@ fi
 ready=false
 deadline=$((SECONDS + 20))
 while ((SECONDS < deadline)); do
-  if docker exec "$SERVICE" curl -fsS --connect-timeout 1 --max-time 2 \
+  if docker exec "$CONTAINER" curl -fsS --connect-timeout 1 --max-time 2 \
     "${curl_auth[@]}" "http://127.0.0.1:4096/api/info" >/dev/null 2>&1; then
     ready=true
     break
   fi
-  if [[ "$(docker inspect -f '{{.State.Running}}' "$SERVICE" 2>/dev/null || true)" != true ]]; then
+  if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || true)" != true ]]; then
     break
   fi
   sleep 0.5
 done
 
 if [[ "$ready" != true ]]; then
-  echo "erro: o agente '$SERVICE' não respondeu em /api/info em até 20s." >&2
-  echo "--- docker logs --tail 50 $SERVICE ---" >&2
-  docker logs --tail 50 "$SERVICE" >&2 || true
+  echo "erro: o agente '$CONTAINER' não respondeu em /api/info em até 20s." >&2
+  echo "--- docker logs --tail 50 $CONTAINER ---" >&2
+  docker logs --tail 50 "$CONTAINER" >&2 || true
   exit 1
 fi
 
 env_args=(
   -e HOME=/tmp
+  -e "OC_PROJECT=$PROJECT"
   -e "OPENCODE_AGENT_MAX_WAIT_MS=${SMOKE_MAX_WAIT_MS:-120000}"
   -e "OPENCODE_AGENT_POLL_INTERVAL_MS=${OPENCODE_AGENT_POLL_INTERVAL_MS:-500}"
   -e "OPENCODE_AGENT_REQUEST_TIMEOUT_MS=${OPENCODE_AGENT_REQUEST_TIMEOUT_MS:-30000}"

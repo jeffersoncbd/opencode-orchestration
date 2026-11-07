@@ -21,8 +21,8 @@ for f in \${USER_CONFIGS[@]+"\${USER_CONFIGS[@]}"}; do printf 'file=%s\\n' "$f";
 if _dockercode_has_project_config "$PROJECT"; then echo 'project=yes'; else echo 'project=no'; fi
 `
   const childEnv: NodeJS.ProcessEnv = { ...process.env, HOME: home, LIB_PATH: LIB, PROJECT: project }
-  delete childEnv.DOCKERCODE_CONFIG_FILE
-  delete childEnv.DOCKERCODE_CONFIG_DIR
+  delete childEnv.OC_CONFIG_FILE
+  delete childEnv.OC_CONFIG_DIR
   Object.assign(childEnv, env)
 
   const result = spawnSync("bash", ["-c", script], { env: childEnv, encoding: "utf8" })
@@ -83,13 +83,13 @@ test("usa ~/.config/dockercode/opencode.json e opencode.jsonc por padrão", { sk
   }
 })
 
-test("DOCKERCODE_CONFIG_FILE tem precedência e resolve o diretório", { skip: !HAS_BASH }, () => {
+test("OC_CONFIG_FILE tem precedência e resolve o diretório", { skip: !HAS_BASH }, () => {
   const { home, project, cleanup } = makeHome()
   try {
     writeConfig(join(home, ".config", "dockercode"))
     const customDir = join(home, "custom-config")
     writeConfig(customDir)
-    const resolved = resolveConfig(home, project, { DOCKERCODE_CONFIG_FILE: join(customDir, "opencode.json") })
+    const resolved = resolveConfig(home, project, { OC_CONFIG_FILE: join(customDir, "opencode.json") })
     assert.equal(resolved.dir, customDir)
     assert.deepEqual(resolved.files, [join(customDir, "opencode.json")])
   } finally {
@@ -97,12 +97,12 @@ test("DOCKERCODE_CONFIG_FILE tem precedência e resolve o diretório", { skip: !
   }
 })
 
-test("DOCKERCODE_CONFIG_FILE inválido aborta com erro", { skip: !HAS_BASH }, () => {
+test("OC_CONFIG_FILE inválido aborta com erro", { skip: !HAS_BASH }, () => {
   const { home, project, cleanup } = makeHome()
   try {
     writeConfig(join(home, "custom-config"), "outro.json")
     assert.throws(
-      () => resolveConfig(home, project, { DOCKERCODE_CONFIG_FILE: join(home, "custom-config", "outro.json") }),
+      () => resolveConfig(home, project, { OC_CONFIG_FILE: join(home, "custom-config", "outro.json") }),
       /deve apontar para um arquivo chamado opencode\.json ou opencode\.jsonc/,
     )
   } finally {
@@ -110,12 +110,12 @@ test("DOCKERCODE_CONFIG_FILE inválido aborta com erro", { skip: !HAS_BASH }, ()
   }
 })
 
-test("DOCKERCODE_CONFIG_DIR vazio aborta com erro", { skip: !HAS_BASH }, () => {
+test("OC_CONFIG_DIR vazio aborta com erro", { skip: !HAS_BASH }, () => {
   const { home, project, cleanup } = makeHome()
   try {
     const empty = join(home, "empty")
     mkdirSync(empty, { recursive: true })
-    assert.throws(() => resolveConfig(home, project, { DOCKERCODE_CONFIG_DIR: empty }), /nenhum opencode\.json/)
+    assert.throws(() => resolveConfig(home, project, { OC_CONFIG_DIR: empty }), /nenhum opencode\.json/)
   } finally {
     cleanup()
   }

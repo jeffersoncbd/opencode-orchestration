@@ -13,12 +13,26 @@ if [[ ! -f "$PASS_FILE" ]]; then
 fi
 PASSWORD="$(cat "$PASS_FILE")"
 
-name="$(basename "$PWD")"
-if ! [[ "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
-  echo "erro: o nome da pasta '$name' não é um nome de serviço válido." >&2
+service="$(basename "$PWD")"
+if ! [[ "$service" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+  echo "erro: o nome da pasta '$service' não é um nome de serviço válido." >&2
   echo "use letras, números, '_', '.' e '-', começando por letra ou número." >&2
   exit 1
 fi
+
+project="${OC_PROJECT:-}"
+if [[ -z "$project" ]]; then
+  echo "erro: defina OC_PROJECT com o prefixo do projeto (ex.: OC_PROJECT=projeto-x oc-agent ...)." >&2
+  echo "o prefixo evita colisão entre agentes de projetos diferentes (ex.: projeto-x-webapp)." >&2
+  exit 1
+fi
+if ! [[ "$project" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+  echo "erro: OC_PROJECT='$project' não é um prefixo válido." >&2
+  echo "use letras, números, '_', '.' e '-', começando por letra ou número." >&2
+  exit 1
+fi
+
+name="$project-$service"
 if docker container inspect "$name" >/dev/null 2>&1; then
   echo "erro: já existe um container chamado '$name'." >&2
   echo "pare/remova o container anterior (docker stop '$name' ou docker rm '$name') e tente de novo." >&2
@@ -43,14 +57,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Imagem: DOCKERCODE_AGENT_IMAGE > .dockercode/agent-image > .dockercode/image >
-# opencode-agent. O comando é passado explicitamente, então a imagem estendida do
+# Imagem: OC_AGENT_IMAGE > .dockercode/agent-image > .dockercode/image >
+# oc-agent. O comando é passado explicitamente, então a imagem estendida do
 # projeto (com dependências extras) serve tanto para o principal quanto para o agente.
-image="$(_dockercode_resolve_image "$PWD" opencode-agent "${DOCKERCODE_AGENT_IMAGE:-}" agent-image image)"
+image="$(_dockercode_resolve_image "$PWD" oc-agent "${OC_AGENT_IMAGE:-}" agent-image image)"
 
 if ! docker image inspect "$image" >/dev/null 2>&1; then
   echo "erro: imagem '$image' não encontrada." >&2
-  echo "construa-a e aponte em .dockercode/agent-image (ou DOCKERCODE_AGENT_IMAGE), ou rode ./install.sh para a imagem padrão." >&2
+  echo "construa-a e aponte em .dockercode/agent-image (ou OC_AGENT_IMAGE), ou rode ./install.sh para a imagem padrão." >&2
   exit 1
 fi
 
@@ -71,6 +85,7 @@ docker run -d --rm \
   --name "$name" \
   -u "$(id -u):$(id -g)" \
   -e HOME=/tmp \
+  -e "OC_PROJECT=$project" \
   -e "OPENCODE_SERVER_PASSWORD=$PASSWORD" \
   -e OPENCODE_API_KEY \
   -v "$PWD":/workspace \

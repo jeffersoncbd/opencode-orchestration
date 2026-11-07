@@ -7,11 +7,32 @@ import {
   formatModelEfforts,
   formatOutcome,
   formatPermissionRequest,
+  qualifyServiceName,
   resolveEffort,
+  validateServiceName,
   type FormField,
   type FormRequest,
   type PermissionRequest,
 } from "../config/lib/service-format.ts"
+
+test("validateServiceName aceita nomes válidos e rejeita inválidos", () => {
+  assert.equal(validateServiceName("servico-a"), "servico-a")
+  assert.equal(validateServiceName("webapp_v2.1"), "webapp_v2.1")
+
+  for (const invalid of ["", "-webapp", "web app", "web/app", 42, null]) {
+    assert.throws(() => validateServiceName(invalid), /nome de serviço inválido/)
+  }
+})
+
+test("qualifyServiceName aplica o prefixo do projeto uma única vez", () => {
+  assert.equal(qualifyServiceName("webapp", "projeto-x"), "projeto-x-webapp")
+  assert.equal(qualifyServiceName("webapp", " projeto-x-- "), "projeto-x-webapp")
+  assert.equal(qualifyServiceName("projeto-x-webapp", "projeto-x"), "projeto-x-webapp")
+  assert.equal(qualifyServiceName("projeto-x-webapp", "projeto-x-"), "projeto-x-webapp")
+  assert.equal(qualifyServiceName("webapp", ""), "webapp")
+  assert.equal(qualifyServiceName("webapp", "   "), "webapp")
+  assert.throws(() => qualifyServiceName("web app", "projeto-x"), /nome de serviço inválido/)
+})
 
 test("formatField descreve campo de texto livre", () => {
   const field: FormField = {

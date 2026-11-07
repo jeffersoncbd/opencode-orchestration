@@ -19,4 +19,6 @@ RUN mkdir -p /workspace /volume /tmp/.config/opencode \
 USER node
 WORKDIR /workspace
 
-CMD ["opencode"]
+# O container principal fica vivo em background; a TUI é aberta depois com
+# `oc-run` (docker exec -it <container> opencode -c).
+CMD ["sleep", "infinity"]

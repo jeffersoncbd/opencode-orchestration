@@ -6,6 +6,7 @@ import {
   formatModelEfforts,
   formatOutcome,
   formatPermissionRequest,
+  qualifyServiceName,
   resolveEffort,
   type FormRequest,
   type Outcome,
@@ -28,20 +29,13 @@ const POLL_INTERVAL_MS = positiveNumber(process.env.OPENCODE_AGENT_POLL_INTERVAL
 const MAX_WAIT_MS = positiveNumber(process.env.OPENCODE_AGENT_MAX_WAIT_MS, 15 * 60 * 1000)
 const REQUEST_TIMEOUT_MS = positiveNumber(process.env.OPENCODE_AGENT_REQUEST_TIMEOUT_MS, 30 * 1000)
 
-const SERVICE_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/
+const PROJECT_PREFIX = (process.env.OC_PROJECT ?? "").trim()
+const SERVICE_INPUT_DESCRIPTION =
+  "Nome do serviço (ex.: servico-a). O prefixo do projeto (OC_PROJECT) é aplicado automaticamente; " +
+  "informe o nome completo apenas se quiser evitá-lo."
 const MESSAGE_PAGE_SIZE = 50
 // Limite de segurança para não varrer uma sessão inteira em caso de cursor inesperado.
 const MAX_MESSAGE_PAGES = 20
-
-function validateServiceName(value: unknown): string {
-  if (typeof value !== "string" || !SERVICE_NAME_PATTERN.test(value)) {
-    throw new Error(
-      `nome de serviço inválido: ${JSON.stringify(value)}. Use letras, números, '_', '.' e '-', ` +
-        `começando por letra ou número (ex.: servico-a).`,
-    )
-  }
-  return value
-}
 
 function validateTask(value: unknown, service: string): string {
   if (typeof value !== "string" || value.trim() === "") {
@@ -885,7 +879,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
+            service: { type: "string", description: SERVICE_INPUT_DESCRIPTION },
             task: { type: "string", description: "Instrução ou tarefa a executar no agente do serviço" },
           },
           required: ["service", "task"],
@@ -893,9 +887,9 @@ export default Plugin.define({
         },
         async execute(input, context) {
           const { service, task } = input as { service: string; task: string }
-          validateServiceName(service)
-          validateTask(task, service)
-          return { content: await withServiceContext(service, () => delegate(service, task, context.signal)) }
+          const target = qualifyServiceName(service, PROJECT_PREFIX)
+          validateTask(task, target)
+          return { content: await withServiceContext(target, () => delegate(target, task, context.signal)) }
         },
       })
 
@@ -909,15 +903,15 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
+            service: { type: "string", description: SERVICE_INPUT_DESCRIPTION },
           },
           required: ["service"],
           additionalProperties: false,
         },
         async execute(input, context) {
           const { service } = input as { service: string }
-          validateServiceName(service)
-          return { content: await withServiceContext(service, () => status(service, context.signal)) }
+          const target = qualifyServiceName(service, PROJECT_PREFIX)
+          return { content: await withServiceContext(target, () => status(target, context.signal)) }
         },
       })
 
@@ -930,15 +924,15 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
+            service: { type: "string", description: SERVICE_INPUT_DESCRIPTION },
           },
           required: ["service"],
           additionalProperties: false,
         },
         async execute(input, context) {
           const { service } = input as { service: string }
-          validateServiceName(service)
-          return { content: await withServiceContext(service, () => interruptService(service, context.signal)) }
+          const target = qualifyServiceName(service, PROJECT_PREFIX)
+          return { content: await withServiceContext(target, () => interruptService(target, context.signal)) }
         },
       })
 
@@ -951,7 +945,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
+            service: { type: "string", description: SERVICE_INPUT_DESCRIPTION },
             requestID: { type: "string", description: "id do pedido retornado pela tool 'service' (ex.: per_abc123), ou '*' para todos" },
             decision: {
               type: "string",
@@ -970,10 +964,10 @@ export default Plugin.define({
             decision: string
             message?: string
           }
-          validateServiceName(service)
+          const target = qualifyServiceName(service, PROJECT_PREFIX)
           return {
-            content: await withServiceContext(service, () =>
-              respondPermission(service, requestID, decision, message, context.signal),
+            content: await withServiceContext(target, () =>
+              respondPermission(target, requestID, decision, message, context.signal),
             ),
           }
         },
@@ -991,7 +985,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
+            service: { type: "string", description: SERVICE_INPUT_DESCRIPTION },
             formID: {
               type: "string",
               description: "id do formulário retornado pela tool 'service' (obrigatório para responder); '*' só com cancel: true",
@@ -1009,10 +1003,10 @@ export default Plugin.define({
             answer?: Record<string, unknown>
             cancel?: boolean
           }
-          validateServiceName(service)
+          const target = qualifyServiceName(service, PROJECT_PREFIX)
           return {
-            content: await withServiceContext(service, () =>
-              respondForm(service, formID, answer, cancel === true, context.signal),
+            content: await withServiceContext(target, () =>
+              respondForm(target, formID, answer, cancel === true, context.signal),
             ),
           }
         },
@@ -1027,15 +1021,15 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
+            service: { type: "string", description: SERVICE_INPUT_DESCRIPTION },
           },
           required: ["service"],
           additionalProperties: false,
         },
         async execute(input, context) {
           const { service } = input as { service: string }
-          validateServiceName(service)
-          return { content: await withServiceContext(service, () => listModels(service, context.signal)) }
+          const target = qualifyServiceName(service, PROJECT_PREFIX)
+          return { content: await withServiceContext(target, () => listModels(target, context.signal)) }
         },
       })
 
@@ -1048,7 +1042,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
+            service: { type: "string", description: SERVICE_INPUT_DESCRIPTION },
             model: {
               type: "string",
               description: "Opcional: modelo específico (nome ou 'provider/modelID') para listar os esforços",
@@ -1059,9 +1053,9 @@ export default Plugin.define({
         },
         async execute(input, context) {
           const { service, model } = input as { service: string; model?: string }
-          validateServiceName(service)
+          const target = qualifyServiceName(service, PROJECT_PREFIX)
           return {
-            content: await withServiceContext(service, () => listEfforts(service, model, context.signal)),
+            content: await withServiceContext(target, () => listEfforts(target, model, context.signal)),
           }
         },
       })
@@ -1076,7 +1070,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
+            service: { type: "string", description: SERVICE_INPUT_DESCRIPTION },
             model: { type: "string", description: "Modelo a usar (nome, 'provider/modelID' ou 'provider/modelID#esforço')" },
           },
           required: ["service", "model"],
@@ -1084,14 +1078,14 @@ export default Plugin.define({
         },
         async execute(input, context) {
           const { service, model } = input as { service: string; model: string }
-          validateServiceName(service)
+          const target = qualifyServiceName(service, PROJECT_PREFIX)
           return {
-            content: await withServiceContext(service, async () => {
-              const resolved = await resolveModel(service, model ?? "", context.signal)
+            content: await withServiceContext(target, async () => {
+              const resolved = await resolveModel(target, model ?? "", context.signal)
               let selected: ModelRef | undefined
               let dropped: string | undefined
               await updateState((state) => {
-                const svc = getServiceState(state, service)
+                const svc = getServiceState(state, target)
                 const previous = svc.model?.variant
                 const variant = resolved.variantSpecified
                   ? resolved.variant
@@ -1105,13 +1099,13 @@ export default Plugin.define({
                   ...(variant ? { variant } : {}),
                 }
                 svc.model = selected
-                state[service] = svc
+                state[target] = svc
               })
               const effort = selected!.variant ? `; esforço: ${selected!.variant}` : ""
               const removed = dropped
                 ? ` (esforço anterior '${dropped}' removido: indisponível neste modelo)`
                 : ""
-              return `modelo de '${service}' definido para ${selected!.providerID}/${selected!.modelID}${effort}${removed}`
+              return `modelo de '${target}' definido para ${selected!.providerID}/${selected!.modelID}${effort}${removed}`
             }),
           }
         },
@@ -1126,7 +1120,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
+            service: { type: "string", description: SERVICE_INPUT_DESCRIPTION },
             effort: {
               type: "string",
               description: "Nível de esforço/variant (ex.: low, high, max) ou 'default' para o padrão do modelo",
@@ -1137,9 +1131,9 @@ export default Plugin.define({
         },
         async execute(input, context) {
           const { service, effort } = input as { service: string; effort: string }
-          validateServiceName(service)
+          const target = qualifyServiceName(service, PROJECT_PREFIX)
           return {
-            content: await withServiceContext(service, () => setEffort(service, effort ?? "", context.signal)),
+            content: await withServiceContext(target, () => setEffort(target, effort ?? "", context.signal)),
           }
         },
       })
@@ -1153,7 +1147,7 @@ export default Plugin.define({
         input: {
           type: "object",
           properties: {
-            service: { type: "string", description: "Nome do container/serviço na mesma rede Docker (ex.: servico-a)" },
+            service: { type: "string", description: SERVICE_INPUT_DESCRIPTION },
             force: {
               type: "boolean",
               description: "true para limpar apenas o estado local, sem tentar remover a sessão no agente",
@@ -1164,9 +1158,9 @@ export default Plugin.define({
         },
         async execute(input, context) {
           const { service, force } = input as { service: string; force?: boolean }
-          validateServiceName(service)
+          const target = qualifyServiceName(service, PROJECT_PREFIX)
           return {
-            content: await withServiceContext(service, () => resetService(service, force === true, context.signal)),
+            content: await withServiceContext(target, () => resetService(target, force === true, context.signal)),
           }
         },
       })

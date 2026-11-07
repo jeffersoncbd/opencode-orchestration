@@ -28,6 +28,27 @@ export type FormRequest = {
   fields: FormField[]
 }
 
+export const SERVICE_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/
+
+export function validateServiceName(value: unknown): string {
+  if (typeof value !== "string" || !SERVICE_NAME_PATTERN.test(value)) {
+    throw new Error(
+      `nome de serviço inválido: ${JSON.stringify(value)}. Use letras, números, '_', '.' e '-', ` +
+        `começando por letra ou número (ex.: servico-a).`,
+    )
+  }
+  return value
+}
+
+// Aplica o prefixo do projeto (OC_PROJECT) ao nome do serviço, sem duplicar
+// quando o nome já vier prefixado.
+export function qualifyServiceName(value: unknown, prefix = ""): string {
+  const name = validateServiceName(value)
+  const normalizedPrefix = prefix.trim().replace(/-+$/, "")
+  if (!normalizedPrefix || name.startsWith(`${normalizedPrefix}-`)) return name
+  return validateServiceName(`${normalizedPrefix}-${name}`)
+}
+
 export type Outcome =
   | { kind: "permission"; permissions: PermissionRequest[] }
   | { kind: "form"; forms: FormRequest[] }

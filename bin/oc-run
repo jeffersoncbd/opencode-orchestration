@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Abre a TUI do OpenCode no container principal.
+# Sem argumentos, o nome do container é inferido a partir da pasta atual: <pasta>.
+# Com um nome, usa esse container (que precisa já estar em execução), permitindo
+# abrir a TUI de qualquer diretório.
+# Sem nome explícito, sobe o container automaticamente com `oc-main` se preciso.
+set -euo pipefail
+
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+  cat <<'EOF'
+uso: oc-run [nome]
+
+Abre a TUI do OpenCode no container principal.
+
+Sem argumentos, usa o nome da pasta atual como container (e sobe o container
+com `oc-main` se ele ainda não existir). Com `nome`, usa esse container, que
+precisa já estar em execução — isso permite abrir a TUI de qualquer pasta.
+
+Opções:
+  -h, --help   esta ajuda
+EOF
+}
+
+explicit_name=false
+name=""
+case "$#" in
+  0)
+    name="$(basename "$PWD")"
+    ;;
+  1)
+    case "$1" in
+      -h | --help) usage; exit 0 ;;
+      -*) echo "erro: opção desconhecida: $1" >&2; usage >&2; exit 2 ;;
+      *) name="$1"; explicit_name=true ;;
+    esac
+    ;;
+  *)
+    echo "erro: informe no máximo um nome de container." >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
+if ! [[ "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+  if [[ "$explicit_name" == true ]]; then
+    echo "erro: '$name' não é um nome de container válido." >&2
+  else
+    echo "erro: o nome da pasta '$name' não é válido para o container principal." >&2
+  fi
+  echo "use letras, números, '_', '.' e '-', começando por letra ou número." >&2
+  exit 1
+fi
+
+command -v docker >/dev/null 2>&1 || {
+  echo "erro: docker não encontrado no PATH" >&2
+  exit 1
+}
+
+container_exists() {
+  docker container inspect "$name" >/dev/null 2>&1
+}
+
+if ! container_exists; then
+  if [[ "$explicit_name" == true ]]; then
+    echo "erro: container '$name' não encontrado." >&2
+    echo "com um nome explícito o oc-run não sobe o container; use um container em execução" >&2
+    echo "(veja 'docker ps') ou rode 'oc-main' na pasta do projeto e depois 'oc-run'." >&2
+    exit 1
+  fi
+
+  oc_main="$BIN_DIR/oc-main"
+  if [[ ! -x "$oc_main" ]]; then
+    oc_main="$(command -v oc-main || true)"
+  fi
+  if [[ -z "$oc_main" ]]; then
+    echo "erro: container '$name' não encontrado e o launcher 'oc-main' não foi localizado." >&2
+    echo "instale com './install.sh' ou rode 'oc-main' em '$PWD' primeiro." >&2
+    exit 1
+  fi
+
+  echo "container '$name' não encontrado; iniciando com 'oc-main'..." >&2
+  "$oc_main"
+
+  if ! container_exists; then
+    echo "erro: container '$name' não encontrado após executar 'oc-main'." >&2
+    exit 1
+  fi
+fi
+
+running="$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null || true)"
+if [[ "$running" != true ]]; then
+  echo "erro: o container '$name' existe mas não está em execução." >&2
+  echo "remova-o (docker rm -f '$name') e rode 'oc-run' novamente." >&2
+  exit 1
+fi
+
+exec docker exec -it "$name" opencode -c

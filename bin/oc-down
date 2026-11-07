@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# Para o stack do projeto (agentes + container principal) definido em
+# .oc-services (ou OC_STACK_FILE / --config).
+set -euo pipefail
+
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=dockercode-stack.sh
+source "$BIN_DIR/dockercode-stack.sh"
+
+usage() {
+  cat <<'EOF'
+uso: oc-down [opções]
+
+Para os containers dos agentes e o principal conforme .oc-services.
+Executa os hooks before-down/after-down na raiz do projeto.
+
+Opções:
+  --keep-main          não para o container principal
+  --config <arquivo>   usa outro arquivo de stack
+  --print, --dry-run   apenas valida e mostra a configuração interpretada
+  -h, --help           esta ajuda
+
+Variáveis:
+  OC_STACK_FILE        caminho alternativo do arquivo de stack
+  OC_PROJECT           usado quando o arquivo não define `project`
+EOF
+}
+
+keep_main=false
+print_only=false
+config_file=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --keep-main) keep_main=true; shift ;;
+    --config)
+      [[ $# -ge 2 ]] || { echo "erro: --config exige um arquivo." >&2; exit 2; }
+      config_file="$2"
+      shift 2
+      ;;
+    --print | --dry-run) print_only=true; shift ;;
+    -h | --help) usage; exit 0 ;;
+    *)
+      echo "erro: opção desconhecida: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -n "$config_file" ]]; then
+  [[ -f "$config_file" ]] || {
+    echo "erro: arquivo de stack não encontrado: '$config_file'." >&2
+    exit 1
+  }
+  file="$(cd "$(dirname "$config_file")" && pwd -P)/$(basename "$config_file")"
+else
+  if ! file="$(_dockercode_stack_resolve "$PWD")"; then
+    echo "erro: arquivo .oc-services não encontrado a partir de '$PWD'." >&2
+    echo "crie o arquivo na raiz do projeto, defina OC_STACK_FILE ou use --config." >&2
+    exit 1
+  fi
+fi
+
+_dockercode_stack_load "$file"
+
+if [[ "$STACK_PROJECT_EXPLICIT" != true && -n "${OC_PROJECT:-}" ]]; then
+  _dockercode_stack_validate_name "OC_PROJECT" "$OC_PROJECT"
+  STACK_PROJECT="$OC_PROJECT"
+fi
+
+if [[ "$print_only" == true ]]; then
+  _dockercode_stack_print
+  exit 0
+fi
+
+command -v docker >/dev/null 2>&1 || {
+  echo "erro: docker não encontrado no PATH." >&2
+  exit 1
+}
+
+cd "$STACK_ROOT"
+main_name="$(basename "$STACK_ROOT")"
+
+stop_container() {
+  local name="$1"
+  if ! docker container inspect "$name" >/dev/null 2>&1; then
+    echo "  $name: não existe"
+    return 0
+  fi
+  echo "  $name: parando..."
+  if ! docker stop -t 10 "$name" >/dev/null 2>&1; then
+    echo "  aviso: falha ao parar '$name' (tentando remover à força)..." >&2
+  fi
+  if docker container inspect "$name" >/dev/null 2>&1; then
+    docker rm -f "$name" >/dev/null 2>&1 || echo "  aviso: não foi possível remover '$name'" >&2
+  fi
+}
+
+if [[ ${#STACK_BEFORE_DOWN[@]} -gt 0 ]]; then
+  _dockercode_stack_run_hooks "before-down" "${STACK_BEFORE_DOWN[@]}"
+fi
+
+echo "==> parando agentes do stack '$STACK_PROJECT'..." >&2
+for (( i = ${#STACK_SERVICE_NAMES[@]} - 1; i >= 0; i-- )); do
+  stop_container "$STACK_PROJECT-${STACK_SERVICE_NAMES[$i]}"
+done
+
+if [[ "$keep_main" != true ]]; then
+  echo "==> parando principal '$main_name'..." >&2
+  stop_container "$main_name"
+fi
+
+if [[ ${#STACK_AFTER_DOWN[@]} -gt 0 ]]; then
+  _dockercode_stack_run_hooks "after-down" "${STACK_AFTER_DOWN[@]}"
+fi
+
+echo
+echo "stack '$STACK_PROJECT' parado"
